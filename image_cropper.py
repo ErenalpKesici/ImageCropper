@@ -12,6 +12,7 @@ def process_image(image_folder, image_name):
     current_title = ''
     current_top = 0
     try:
+        # test
         img = cv2.imread(image_folder + '/' + image_name)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         custom_config = r'-l tur --oem 3 --psm 6'
