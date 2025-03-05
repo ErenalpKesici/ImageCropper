@@ -2,12 +2,13 @@ import cv2
 import numpy as np
 import pytesseract
 from pytesseract import Output
-from img2table.ocr import TesseractOCR
-from img2table.document import Image
+# from img2table.ocr import TesseractOCR
+# from img2table.document import Image
 import webbrowser
 import os
 
 last_title = ''
+
 
 def remove_empty_rows_and_columns(image):
     # Convert to grayscale
@@ -37,9 +38,75 @@ def add_outer_border(image, border_size=10):
     )
     return image_with_border
 
-def is_image_blank(image):
+def is_image_blank(image, background_threshold=99.0, min_contour_area=500):
+    """
+    Check if an image is effectively blank (contains only minimal content like page numbers)
+    Works with any background color, not just white.
+    
+    Args:
+        image: Input image in BGR format
+        background_threshold: Percentage similarity to background color to consider blank (default 99.0%)
+        min_contour_area: Minimum contour area to consider as significant content
+        
+    Returns:
+        bool: True if image is considered blank
+    """
+    # Determine the most common color (likely the background)
+    # Convert to RGB for easier analysis
+    pixels = image.reshape(-1, 3)
+    
+    # Find the most common color using a histogram approach
+    # This is more efficient than using Counter for large images
+    pixel_counts = {}
+    for pixel in pixels:
+        # Convert BGR array to tuple for dict key
+        pixel_tuple = tuple(pixel)
+        if pixel_tuple in pixel_counts:
+            pixel_counts[pixel_tuple] += 1
+        else:
+            pixel_counts[pixel_tuple] = 1
+    
+    # Find the most common color
+    background_color = max(pixel_counts.items(), key=lambda x: x[1])[0]
+    background_color = np.array(background_color)
+    
+    # Count pixels that closely match the background color
+    # Using a small threshold to account for compression artifacts
+    color_distance = np.sqrt(np.sum((pixels - background_color)**2, axis=1))
+    background_pixels = np.sum(color_distance < 10)  # Allow some variance
+    
+    # Calculate percentage of background color
+    background_percentage = (background_pixels / pixels.shape[0]) * 100
+    
+    # Method 1: Check percentage of background-colored pixels
+    if background_percentage >= background_threshold:
+        return True
+    
+    # Method 2: Check if there are only small elements (like page numbers)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    return np.all(gray == 255)
+    
+    # Create a mask where background is white and content is black
+    mask = np.zeros_like(gray)
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            if np.sqrt(np.sum((image[i, j] - background_color)**2)) < 10:  # Close to background color
+                mask[i, j] = 255
+    
+    # Invert to get content as white and background as black
+    mask = 255 - mask
+    
+    # Find contours in the mask
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # If no contours, image is blank
+    if not contours:
+        return True
+    
+    # Check if all contours are small (like page numbers)
+    total_contour_area = sum(cv2.contourArea(contour) for contour in contours)
+    
+    # If total area of all contours is small, consider image blank
+    return total_contour_area < min_contour_area
 
 def process_image(image_folder, image_name, operation, params):
     global last_title, last_top
@@ -120,4 +187,4 @@ def process_all_images(image_folder, operation, params):
     except Exception as e:
         print(f"Error processing images: {e}")
 
-process_all_images('images', 'splitter', [4])
+process_all_images('images', 'splitter', [3])
