@@ -90,6 +90,165 @@ def is_image_blank(image, background_threshold=99.0, min_contour_area=500, std_d
     
     return False
 
+def remove_template_from_image(image, template, threshold=0.4, max_matches=20):
+    """
+    Enhanced logo removal function combining multiple techniques
+    """
+    # First resize large images to improve performance
+    h_img, w_img = image.shape[:2]
+    h_temp, w_temp = template.shape[:2]
+    
+    # Skip if template is too large compared to image
+    if h_temp > h_img or w_temp > w_img:
+        return image
+        
+    # Create a copy for the result
+    result_image = image.copy()
+    
+    # 1. Feature-based matching (for rotated/transformed logos)
+    try:
+        # Convert to grayscale
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) > 2 else template
+        
+        # Use SIFT for feature detection
+        sift = cv2.SIFT_create()
+        kp1, des1 = sift.detectAndCompute(gray_template, None)
+        kp2, des2 = sift.detectAndCompute(gray_image, None)
+        
+        if des1 is not None and des2 is not None and len(kp1) > 2 and len(kp2) > 2:
+            # Feature matching
+            FLANN_INDEX_KDTREE = 1
+            index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+            search_params = dict(checks=50)
+            
+            flann = cv2.FlannBasedMatcher(index_params, search_params)
+            matches = flann.knnMatch(des1, des2, k=2)
+            
+            # Only keep good matches
+            good_matches = []
+            for m, n in matches:
+                if m.distance < 0.7 * n.distance:
+                    good_matches.append(m)
+            
+            if len(good_matches) >= 4:
+                # Extract good match points
+                src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                
+                # Find homography to detect logo even with perspective transformation
+                H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+                
+                if H is not None:
+                    # Get the corners of the template
+                    h, w = gray_template.shape
+                    pts = np.float32([[0, 0], [0, h-1], [w-1, h-1], [w-1, 0]]).reshape(-1, 1, 2)
+                    
+                    # Transform corners to image coordinates
+                    dst = cv2.perspectiveTransform(pts, H)
+                    
+                    # Convert to integer
+                    polygon = np.int32(dst)
+                    
+                    # Create a mask for the found region
+                    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+                    cv2.fillPoly(mask, [polygon], 255)
+                    
+                    # Expand the mask slightly
+                    kernel = np.ones((5, 5), np.uint8)
+                    mask = cv2.dilate(mask, kernel, iterations=1)
+                    
+                    # Inpaint the detected region
+                    result_image = cv2.inpaint(result_image, mask, 5, cv2.INPAINT_TELEA)
+    except Exception as e:
+        print(f"Feature-based matching failed: {e}")
+    
+    # 2. Classic template matching with multiple methods and thresholds
+    try:
+        gray_image = cv2.cvtColor(result_image, cv2.COLOR_BGR2GRAY)
+        gray_template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if len(template.shape) > 2 else template
+        
+        # Try different matching methods
+        methods = [cv2.TM_CCOEFF_NORMED, cv2.TM_CCORR_NORMED]
+        
+        for method in methods:
+            # Perform template matching
+            result = cv2.matchTemplate(gray_image, gray_template, method)
+            
+            # Find locations where match quality exceeds threshold
+            locations = np.where(result >= threshold)
+            points = list(zip(*locations[::-1]))  # Switch columns and rows
+            
+            # Sort points by match quality and limit to max_matches
+            if len(points) > max_matches:
+                match_values = [result[pt[1], pt[0]] for pt in points]
+                sorted_indices = np.argsort(match_values)[::-1]  # Sort descending
+                points = [points[i] for i in sorted_indices[:max_matches]]
+            
+            # Process all matching locations
+            for pt in points:
+                h, w = gray_template.shape
+                
+                # Use a larger mask for more aggressive removal
+                padding = 5  # Add more padding for better removal
+                y_start = max(0, pt[1] - padding)
+                y_end = min(result_image.shape[0], pt[1] + h + padding)
+                x_start = max(0, pt[0] - padding)
+                x_end = min(result_image.shape[1], pt[0] + w + padding)
+                
+                # Create a mask for inpainting
+                mask = np.zeros(result_image.shape[:2], np.uint8)
+                mask[y_start:y_end, x_start:x_end] = 255
+                
+                # Inpaint the region with a larger radius
+                result_image = cv2.inpaint(result_image, mask, 7, cv2.INPAINT_TELEA)
+    except Exception as e:
+        print(f"Template matching failed: {e}")
+    
+    # 3. Color-based logo detection (if the logo has distinctive colors)
+    try:
+        # Convert to HSV for better color matching
+        hsv_template = cv2.cvtColor(template, cv2.COLOR_BGR2HSV)
+        hsv_image = cv2.cvtColor(result_image, cv2.COLOR_BGR2HSV)
+        
+        # Calculate the color histogram of the template
+        hist_template = cv2.calcHist([hsv_template], [0, 1], None, [180, 256], [0, 180, 0, 256])
+        cv2.normalize(hist_template, hist_template, 0, 255, cv2.NORM_MINMAX)
+        
+        # Use backprojection to find regions with similar color distribution
+        dst = cv2.calcBackProject([hsv_image], [0, 1], hist_template, [0, 180, 0, 256], 1)
+        
+        # Apply a threshold to the backprojection
+        _, mask = cv2.threshold(dst, 100, 255, cv2.THRESH_BINARY)
+        mask = cv2.merge((mask, mask, mask))
+        
+        # Remove small noise with morphology
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        
+        # Convert mask to single channel for inpainting
+        mask_gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        
+        # Find contours in the mask
+        contours, _ = cv2.findContours(mask_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter contours by size (similar to template size)
+        template_area = h_temp * w_temp
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > template_area * 0.5 and area < template_area * 3:
+                # Create a mask for this contour
+                cont_mask = np.zeros(result_image.shape[:2], np.uint8)
+                cv2.drawContours(cont_mask, [contour], 0, 255, -1)
+                
+                # Inpaint the contour region
+                result_image = cv2.inpaint(result_image, cont_mask, 5, cv2.INPAINT_TELEA)
+    except Exception as e:
+        print(f"Color-based detection failed: {e}")
+    
+    return result_image
+
 class ImageCropperApp:
     def __init__(self, root):
         self.root = root
@@ -143,21 +302,23 @@ class ImageCropperApp:
         save_settings_button.pack(anchor=tk.W, pady=5)
         
         # Create a frame to hold operation and parameters side by side
-        op_param_container = ttk.Frame(main_frame)
-        op_param_container.pack(fill=tk.X, pady=5)
+        self.op_param_container = ttk.Frame(main_frame)  # Store as instance variable
+        self.op_param_container.pack(fill=tk.X, pady=5)
         
         # Operation section - now in left half
-        operation_frame = ttk.LabelFrame(op_param_container, text="Operation", padding="10")
+        operation_frame = ttk.LabelFrame(self.op_param_container, text="Operation", padding="10")
         operation_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
         self.operation_var = tk.StringVar(value="splitter")
-        operations = [("Split Images", "splitter"), ("Crop Titles", "title_cropper")]
+        operations = [("Split Images", "splitter"), 
+                     ("Crop Titles", "title_cropper"),
+                     ("Remove Templates", "template_remover")]  # Add the new operation
         
         for text, value in operations:
             ttk.Radiobutton(operation_frame, text=text, value=value, variable=self.operation_var).pack(anchor=tk.W)
         
         # Parameters section - now in right half
-        param_frame = ttk.LabelFrame(op_param_container, text="Parameters", padding="10")
+        param_frame = ttk.LabelFrame(self.op_param_container, text="Parameters", padding="10")
         param_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
         
         ttk.Label(param_frame, text="Splits (for splitter):").pack(anchor=tk.W)
@@ -165,6 +326,20 @@ class ImageCropperApp:
         self.splits_var = tk.StringVar(value="6")
         splits_entry = ttk.Entry(param_frame, textvariable=self.splits_var, width=5)
         splits_entry.pack(anchor=tk.W, pady=5)
+
+        # Add a slider for template matching threshold
+        ttk.Label(param_frame, text="Template Match Sensitivity:").pack(anchor=tk.W, pady=(10, 0))
+        self.template_sensitivity_var = tk.DoubleVar(value=0.6)
+        template_sensitivity_scale = ttk.Scale(
+            param_frame, 
+            from_=0.3, 
+            to=0.8, 
+            orient="horizontal", 
+            variable=self.template_sensitivity_var, 
+            length=150
+        )
+        template_sensitivity_scale.pack(anchor=tk.W, pady=(0, 5), fill=tk.X)
+        ttk.Label(param_frame, text="(Lower = More aggressive removal)").pack(anchor=tk.W)
         
         # Preview area - will show thumbnails of selected images, with reduced height
         preview_frame = ttk.LabelFrame(main_frame, text="Preview", padding="10")
@@ -190,13 +365,33 @@ class ImageCropperApp:
         status_label = ttk.Label(main_frame, textvariable=self.status_var)
         status_label.pack(anchor=tk.W, pady=5)
         
-        # Process button
-        process_button = ttk.Button(main_frame, text="Process Images", command=self.process_images)
-        process_button.pack(pady=10)
+        # Add cancel button next to process button
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=10)
+        
+        process_button = ttk.Button(button_frame, text="Process Images", command=self.process_images)
+        process_button.pack(side=tk.LEFT, padx=5)
+        
+        self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_processing, state=tk.DISABLED)
+        self.cancel_button.pack(side=tk.LEFT, padx=5)
         
         # Open output folder button
         open_folder_button = ttk.Button(main_frame, text="Open Output Folder", command=self.open_output_folder)
         open_folder_button.pack(pady=5)
+        
+        # Add a new section for template images that appears when "Remove Templates" is selected
+        self.templates_frame = ttk.LabelFrame(main_frame, text="Watermark/Logo Templates to Remove", padding="10")
+
+        self.template_files = []
+        self.template_files_label = ttk.Label(self.templates_frame, text="No templates selected")
+        self.template_files_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        select_templates_button = ttk.Button(self.templates_frame, text="Select Watermarks/Logos", 
+                                             command=self.select_templates)
+        select_templates_button.pack(side=tk.RIGHT)
+        
+        # Show/hide the templates frame based on operation selection
+        self.operation_var.trace("w", self.toggle_templates_frame)
         
     def select_files(self):
         filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff")]
@@ -249,8 +444,10 @@ class ImageCropperApp:
             if not os.path.exists(self.output_dir):
                 os.makedirs(self.output_dir)
             
-            # Modified process_image function to use selected output directory
-            img = cv2.imread(image_path)
+            # Use PIL to read the image instead of OpenCV for better Unicode support
+            pil_img = Image.open(image_path)
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            
             if img is None:
                 print(f"Could not read image: {image_path}")
                 return
@@ -315,6 +512,55 @@ class ImageCropperApp:
                     current_top += min_row_height
                     i += 1
                     
+            elif operation == 'template_remover':
+                # New operation to remove templates from images
+                result_img = img.copy()
+                
+                if not self.template_files:
+                    messagebox.showwarning("No Templates", "Please select template images first.")
+                    return
+                
+                # Add status updates
+                self.status_var.set(f"Processing image {index+1}/{total} - Removing templates...")
+                
+                # Try with different scales in case the template size varies
+                scales = [1.0, 0.75, 1.25]
+                
+                # Use the sensitivity value:
+                threshold_base = self.template_sensitivity_var.get()
+                thresholds = [threshold_base, threshold_base - 0.1, threshold_base - 0.2]
+                
+                # Process each template
+                for template_path in self.template_files:
+                    try:
+                        # Use PIL to load the template
+                        template_pil = Image.open(template_path)
+                        template = cv2.cvtColor(np.array(template_pil), cv2.COLOR_RGB2BGR)
+                        
+                        if template is None:
+                            continue
+                            
+                        # Process with different scales
+                        for scale in scales:
+                            if scale != 1.0:
+                                h, w = template.shape[:2]
+                                scaled_w, scaled_h = int(w * scale), int(h * scale)
+                                if scaled_w > 0 and scaled_h > 0:
+                                    scaled_template = cv2.resize(template, (scaled_w, scaled_h))
+                                    # Use higher threshold for better performance
+                                    result_img = remove_template_from_image(result_img, scaled_template, threshold=0.7, max_matches=5)
+                            else:
+                                # Use higher threshold for better performance
+                                result_img = remove_template_from_image(result_img, template, threshold=0.7, max_matches=5)
+                                
+                    except Exception as e:
+                        print(f"Error applying template {template_path}: {e}")
+                
+                # Save the result using PIL to handle Unicode paths
+                output_path = os.path.join(self.output_dir, f"cleaned_{image_name}")
+                result_pil = Image.fromarray(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB))
+                result_pil.save(output_path)
+            
             # Update progress
             progress = (index + 1) / total * 100
             self.progress_var.set(progress)
@@ -364,10 +610,16 @@ class ImageCropperApp:
         messagebox.showinfo("Complete", "Image processing completed successfully!")
     
     def process_images(self):
+        self.processing_cancelled = False
+        self.cancel_button.config(state=tk.NORMAL)
         thread = threading.Thread(target=self.process_images_thread)
         thread.daemon = True
         thread.start()
     
+    def cancel_processing(self):
+        self.processing_cancelled = True
+        self.status_var.set("Cancelling...")
+
     def open_output_folder(self):
         if os.path.exists(self.output_dir):
             # Open the folder in file explorer (works on Windows)
@@ -435,6 +687,101 @@ class ImageCropperApp:
                 self.update_preview()
             else:
                 messagebox.showwarning("No Images", "No image files found in the selected folder.")
+    
+    def toggle_templates_frame(self, *args):
+        """Show or hide the templates frame based on the selected operation"""
+        if self.operation_var.get() == "template_remover":
+            # Make it appear right after the operation/parameters section
+            self.templates_frame.pack(fill=tk.X, pady=5, after=self.op_param_container)
+            
+            # Show a message box to guide the user if no templates are selected yet
+            # if not self.template_files:
+            #     messagebox.showinfo("Template Selection", 
+            #                        "Please select watermark/logo images to remove using the 'Select Templates' button.")
+        else:
+            self.templates_frame.pack_forget()
+
+    def select_templates(self):
+        """Select template images (logos or watermarks to remove)"""
+        filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff")]
+        files = filedialog.askopenfilenames(filetypes=filetypes)
+        
+        if files:
+            self.template_files = list(files)
+            self.template_files_label.config(text=f"{len(self.template_files)} templates selected")
+            self.update_template_preview()
+            
+            # Show message to explain the process
+            messagebox.showinfo(
+                "Templates Selected", 
+                "Selected templates will be removed from all input images.\n\n" +
+                "Processing may take several minutes depending on the number and size of images."
+            )
+            
+    def update_template_preview(self):
+        """Show thumbnails of selected template images"""
+        # Clear current thumbnails in the templates frame
+        for widget in self.templates_frame.winfo_children():
+            if isinstance(widget, ttk.Frame):
+                widget.destroy()
+        
+        # Create a new frame for thumbnails
+        thumbnails_frame = ttk.Frame(self.templates_frame)
+        thumbnails_frame.pack(fill=tk.X, expand=True, before=self.template_files_label)
+        
+        # Show thumbnails
+        max_templates = min(5, len(self.template_files))
+        self.template_thumbnails = []  # Keep references
+        
+        for i in range(max_templates):
+            try:
+                img = Image.open(self.template_files[i])
+                img.thumbnail((50, 50))  # Smaller thumbnails for templates
+                photo = ImageTk.PhotoImage(img)
+                self.template_thumbnails.append(photo)
+                
+                frame = ttk.Frame(thumbnails_frame)
+                frame.pack(side=tk.LEFT, padx=5)
+                
+                label = ttk.Label(frame, image=photo)
+                label.pack()
+            except Exception as e:
+                print(f"Error creating template thumbnail: {e}")
+
+    def use_ai_inpainting(self, image, mask):
+        """Use an AI model to inpaint masked regions more naturally"""
+        try:
+            # This requires installing transformers and diffusers
+            from diffusers import AutoPipelineForInpainting
+            import torch
+            
+            # Load model - first time will download the model
+            self.status_var.set("Loading AI model (first use may take a while)...")
+            pipe = AutoPipelineForInpainting.from_pretrained(
+                "runwayml/stable-diffusion-inpainting", 
+                torch_dtype=torch.float16,
+                variant="fp16"
+            ).to("cuda" if torch.cuda.is_available() else "cpu")
+            
+            # Convert to PIL format
+            pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            pil_mask = Image.fromarray(mask)
+            
+            # Run inpainting
+            result = pipe(
+                prompt="clean image without watermark",
+                image=pil_image,
+                mask_image=pil_mask,
+                num_inference_steps=20
+            ).images[0]
+            
+            # Convert back to OpenCV format
+            return cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
+        
+        except ImportError:
+            messagebox.showwarning("Libraries Missing", 
+                "For AI-powered removal, install: pip install torch diffusers transformers")
+            return cv2.inpaint(image, mask, 7, cv2.INPAINT_TELEA)  # Fallback
 
 if __name__ == "__main__":
     root = tk.Tk()
