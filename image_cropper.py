@@ -7,8 +7,21 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import numpy as np
+import unicodedata
 
 last_title = ''
+
+def sanitize_filename(filename):
+    """
+    Sanitize a filename to remove or replace problematic characters
+    """
+    # Normalize unicode characters
+    filename = unicodedata.normalize('NFD', filename)
+    # Replace accented characters with their ASCII equivalent
+    filename = ''.join([c for c in filename if not unicodedata.combining(c)])
+    # Replace other problematic characters
+    filename = re.sub(r'[^\w\s.-]', '_', filename)
+    return filename
 
 def remove_empty_rows_and_columns(image, empty_threshold=100):
     # Convert to grayscale
@@ -87,16 +100,19 @@ def is_image_blank(image, background_threshold=99.0, min_contour_area=500, std_d
     
     return False
 
-def process_image(image_path, operation, params):
+def process_image(image_folder, image_name, operation, params):
     global last_title, last_top
     current_title = ''
     current_top = 0
     
     try:
-        # Load image once
-        img = cv2.imread(image_path)
+        # Use sanitized path for reading the image
+        img_path = os.path.join(image_folder, image_name)
+        img = cv2.imread(img_path)
+        
+        # Check if image was loaded successfully
         if img is None:
-            print(f"Could not read image: {image_path}")
+            print(f"Failed to load image: {img_path}")
             return
             
         image_name = os.path.basename(image_path)
@@ -106,7 +122,8 @@ def process_image(image_path, operation, params):
         
         # Only perform OCR when needed
         if operation == 'title_cropper' or operation == 'splitter':
-            d = pytesseract.image_to_data(img, config=custom_config, output_type=Output.DICT)
+            d = pytesseract.image_to_data(img, config=custom_config, output_typ
+            e=Output.DICT)
 
         match operation:
             case 'title_cropper':
@@ -130,7 +147,8 @@ def process_image(image_path, operation, params):
                 if not os.path.exists('cropped'):
                     os.makedirs('cropped')
                 
-                cv2.imwrite(os.path.join('cropped', image_name), img)
+                output_path = os.path.join('cropped', sanitize_filename(image_name))
+                cv2.imwrite(output_path, img)
             
             case 'splitter':
                 height, width, _ = img.shape
@@ -158,7 +176,7 @@ def process_image(image_path, operation, params):
                     if not is_image_blank(crop_img):
                         crop_img = add_outer_border(crop_img, top_border=50, bottom_border=50, left_border=10, right_border=10)
                         crop_img = cv2.resize(crop_img, (1920, 1080))
-                        output_path = os.path.join('cropped', f"{image_name}_{i}.png")
+                        output_path = os.path.join('cropped', f"{sanitize_filename(image_name)}_{i}.png")
                         cv2.imwrite(output_path, crop_img)
                     
                     previous_top = current_top
@@ -200,6 +218,6 @@ if __name__ == "__main__":
     # Determine number of CPU cores for parallel processing
     import multiprocessing
     num_cores = multiprocessing.cpu_count()
-    max_workers = max(1, num_cores - 1)  # Leave one core free for system
+    max_workers = max(1, num_cores)
     
     process_all_images('images', 'splitter', [6], max_workers=max_workers)
