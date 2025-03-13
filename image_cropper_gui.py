@@ -13,6 +13,73 @@ from PIL import Image, ImageTk
 import threading
 import multiprocessing
 
+def detect_text_rows(image, min_row_gap=10):
+    """
+    Detect the number of text rows in an image by analyzing OCR data
+    Returns the number of rows and the row positions
+    """
+    # OCR configuration - use a fast mode since we only need layout
+    custom_config = r'--oem 3 --psm 6'
+    d = pytesseract.image_to_data(image, config=custom_config, output_type=Output.DICT)
+    
+    # Get all text bounding boxes
+    boxes = []
+    for i in range(len(d['text'])):
+        # Skip empty results
+        if d['text'][i].strip() == '':
+            continue
+            
+        # Get the coordinates of this text box
+        x, y, w, h = d['left'][i], d['top'][i], d['width'][i], d['height'][i]
+        boxes.append((x, y, w, h))
+    
+    if not boxes:
+        return 1, []  # No text found, assume 1 row
+    
+    # Sort boxes by vertical position
+    boxes.sort(key=lambda box: box[1])  # Sort by y-coordinate
+    
+    # Group boxes into rows based on vertical position
+    rows = []
+    current_row = [boxes[0]]
+    current_row_bottom = boxes[0][1] + boxes[0][3]  # y + height
+    
+    for box in boxes[1:]:
+        y = box[1]
+        # If this box is significantly below the previous row, start a new row
+        if y > current_row_bottom + min_row_gap:
+            rows.append(current_row)
+            current_row = [box]
+            current_row_bottom = box[1] + box[3]
+        else:
+            # Add to current row and update row bottom if needed
+            current_row.append(box)
+            box_bottom = box[1] + box[3]
+            if box_bottom > current_row_bottom:
+                current_row_bottom = box_bottom
+    
+    # Add the last row if it exists
+    if current_row:
+        rows.append(current_row)
+    
+    # Return the number of rows and the row positions (y-coordinate of each row's top)
+    row_positions = [min(box[1] for box in row) for row in rows]
+    return len(rows), row_positions
+
+def contains_question_indicators(text):
+    """
+    Check if the text contains question indicators like a), A), 1), etc.
+    """
+    # Look for patterns like "a)", "A)", "1)", etc.
+    pattern = r'(?:^|\s)([a-zA-Z0-9])[.)]'
+    matches = re.findall(pattern, text)
+    
+    # Count unique matches
+    unique_indicators = set(matches)
+    
+    # If we have multiple indicators (like a, b, c or 1, 2, 3), it's likely a question
+    return len(unique_indicators) >= 2
+
 def remove_empty_rows_and_columns(image, empty_threshold=100):
     # Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -85,7 +152,7 @@ def is_image_blank(image, background_threshold=99.0, min_contour_area=500, std_d
     
     # Method 3: Check if the image contains only numbers using OCR
     text = pytesseract.image_to_string(image)
-    if re.fullmatch(r'\d+', text.strip()):
+    if text == '' or re.fullmatch(r'\d+', text.strip()):
         return True
     
     return False
@@ -302,11 +369,11 @@ class ImageCropperApp:
         save_settings_button.pack(anchor=tk.W, pady=5)
         
         # Create a frame to hold operation and parameters side by side
-        self.op_param_container = ttk.Frame(main_frame)  # Store as instance variable
-        self.op_param_container.pack(fill=tk.X, pady=5)
+        op_param_container = ttk.Frame(main_frame)
+        op_param_container.pack(fill=tk.X, pady=5)
         
         # Operation section - now in left half
-        operation_frame = ttk.LabelFrame(self.op_param_container, text="Operation", padding="10")
+        operation_frame = ttk.LabelFrame(op_param_container, text="Operation", padding="10")
         operation_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
         self.operation_var = tk.StringVar(value="splitter")
@@ -318,14 +385,24 @@ class ImageCropperApp:
             ttk.Radiobutton(operation_frame, text=text, value=value, variable=self.operation_var).pack(anchor=tk.W)
         
         # Parameters section - now in right half
-        param_frame = ttk.LabelFrame(self.op_param_container, text="Parameters", padding="10")
+        param_frame = ttk.LabelFrame(op_param_container, text="Parameters", padding="10")
         param_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
         
-        ttk.Label(param_frame, text="Splits (for splitter):").pack(anchor=tk.W)
-        
-        self.splits_var = tk.StringVar(value="6")
-        splits_entry = ttk.Entry(param_frame, textvariable=self.splits_var, width=5)
-        splits_entry.pack(anchor=tk.W, pady=5)
+        ttk.Label(param_frame, text="Rows per page:").pack(anchor=tk.W)
+
+        self.rows_per_page_var = tk.StringVar(value="10")
+        self.splits_var = tk.StringVar(value="2")  # Default to 2 splits as fallback
+        rows_per_page_entry = ttk.Entry(param_frame, textvariable=self.rows_per_page_var, width=5)
+        rows_per_page_entry.pack(anchor=tk.W, pady=5)
+
+        # Add a checkbox for using auto-detected rows
+        self.use_row_detection_var = tk.BooleanVar(value=True)
+        use_row_detection_checkbox = ttk.Checkbutton(
+            param_frame, 
+            text="Auto-detect rows (recommended)",
+            variable=self.use_row_detection_var
+        )
+        use_row_detection_checkbox.pack(anchor=tk.W, pady=(0, 10))
 
         # Add a slider for template matching threshold
         ttk.Label(param_frame, text="Template Match Sensitivity:").pack(anchor=tk.W, pady=(10, 0))
@@ -341,43 +418,50 @@ class ImageCropperApp:
         template_sensitivity_scale.pack(anchor=tk.W, pady=(0, 5), fill=tk.X)
         ttk.Label(param_frame, text="(Lower = More aggressive removal)").pack(anchor=tk.W)
         
+        self.detect_questions_var = tk.BooleanVar(value=True)
+        question_checkbox = ttk.Checkbutton(
+            param_frame, 
+            text="Detect questions (don't split)",
+            variable=self.detect_questions_var
+        )
+        question_checkbox.pack(anchor=tk.W, pady=(10, 0))
+
         # Preview area - will show thumbnails of selected images, with reduced height
         preview_frame = ttk.LabelFrame(main_frame, text="Preview", padding="10")
         preview_frame.pack(fill=tk.BOTH, expand=True, pady=1)
-        
+
+        self.preview_frame = ttk.Frame(preview_frame)
+        self.preview_frame.pack(fill=tk.BOTH, expand=True)
+
         self.canvas = tk.Canvas(preview_frame, height=150)  # Increased height slightly
         scrollbar = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.canvas.xview)
         self.canvas.configure(xscrollcommand=scrollbar.set)
-        
+
         scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
-        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)        # Add this in create_widgets method, right before the status_var definition
         
-        self.preview_frame = ttk.Frame(self.canvas)
-        self.canvas.create_window((0, 0), window=self.preview_frame, anchor="nw")
-        
-        # Progress bar
-        self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100)
-        self.progress_bar.pack(fill=tk.X, pady=5)
-        
-        # Status label
+        # Add a progress bar
+        self.progress_var = tk.DoubleVar(value=0)
+        progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100)
+        progress_bar.pack(fill=tk.X, pady=5)
+
         self.status_var = tk.StringVar(value="Ready")
         status_label = ttk.Label(main_frame, textvariable=self.status_var)
         status_label.pack(anchor=tk.W, pady=5)
         
         # Add cancel button next to process button
         button_frame = ttk.Frame(main_frame)
-        button_frame.pack(pady=10)
-        
+        button_frame.pack(fill=tk.X, pady=10)  # Added fill=tk.X
+
         process_button = ttk.Button(button_frame, text="Process Images", command=self.process_images)
         process_button.pack(side=tk.LEFT, padx=5)
-        
+
         self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_processing, state=tk.DISABLED)
         self.cancel_button.pack(side=tk.LEFT, padx=5)
-        
-        # Open output folder button
-        open_folder_button = ttk.Button(main_frame, text="Open Output Folder", command=self.open_output_folder)
-        open_folder_button.pack(pady=5)
+
+        # Open output folder button - move to button_frame
+        open_folder_button = ttk.Button(button_frame, text="Open Output Folder", command=self.open_output_folder)
+        open_folder_button.pack(side=tk.RIGHT, padx=5)        
         
         # Add a new section for template images that appears when "Remove Templates" is selected
         self.templates_frame = ttk.LabelFrame(main_frame, text="Watermark/Logo Templates to Remove", padding="10")
@@ -444,10 +528,8 @@ class ImageCropperApp:
             if not os.path.exists(self.output_dir):
                 os.makedirs(self.output_dir)
             
-            # Use PIL to read the image instead of OpenCV for better Unicode support
-            pil_img = Image.open(image_path)
-            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-            
+            # Modified process_image function to use selected output directory
+            img = cv2.imread(image_path)
             if img is None:
                 print(f"Could not read image: {image_path}")
                 return
@@ -484,33 +566,83 @@ class ImageCropperApp:
                 cv2.imwrite(os.path.join(self.output_dir, image_name), img)
             
             elif operation == 'splitter':
-                height, width, _ = img.shape
-                min_row_height = height // params[0]
-                current_top = min_row_height
-                previous_top = 0
-                i = 0
+                detect_questions = params[1]  # Get the question detection flag
+                rows_per_page = params[2]     # Get rows per page
+                use_row_detection = params[3] # Whether to use auto row detection
                 
-                while i < params[0]:
-                    for j in range(len(d['top'])):
-                        if d['top'][j] > current_top:
-                            break
-                        if d['text'][j] == '':
-                            continue
-                        if d['top'][j] + d['height'][j] > current_top:
-                            current_top = d['top'][j] + d['height'][j]
+                # Only check for questions if the feature is enabled
+                if detect_questions:
+                    ocr_text = pytesseract.image_to_string(img, config=custom_config)
+                    has_questions = contains_question_indicators(ocr_text)
+                else:
+                    has_questions = False
+                
+                if has_questions:
+                    # This image likely contains questions, so just resize without splitting
+                    self.status_var.set(f"Processing image {index+1}/{total} - Contains questions, not splitting")
                     
-                    crop_img = img[previous_top:current_top, :]
-                    crop_img = remove_empty_rows_and_columns(crop_img)
+                    # Clean up the image
+                    cleaned_img = remove_empty_rows_and_columns(img)
+                    cleaned_img = add_outer_border(cleaned_img, top_border=50, bottom_border=50, left_border=10, right_border=10)
                     
-                    if not is_image_blank(crop_img):
-                        crop_img = add_outer_border(crop_img, top_border=50, bottom_border=50, left_border=10, right_border=10)
-                        crop_img = cv2.resize(crop_img, (1920, 1080))
-                        output_path = os.path.join(self.output_dir, f"{image_name}_{i}.png")
-                        cv2.imwrite(output_path, crop_img)
+                    # Resize to desired dimensions
+                    cleaned_img = cv2.resize(cleaned_img, (1920, 1080))
                     
-                    previous_top = current_top
-                    current_top += min_row_height
-                    i += 1
+                    # Save with a special prefix to indicate it contains questions
+                    output_path = os.path.join(self.output_dir, f"question_{image_name}")
+                    cv2.imwrite(output_path, cleaned_img)
+                else:
+                    # No questions detected, proceed with splitting based on rows
+                    
+                    # Get the number of rows if auto-detection is enabled
+                    if use_row_detection:
+                        self.status_var.set(f"Processing image {index+1}/{total} - Detecting text rows...")
+                        num_rows, row_positions = detect_text_rows(img)
+                        
+                        # Calculate number of splits based on rows per page
+                        num_splits = max(1, (num_rows + rows_per_page - 1) // rows_per_page)
+                        self.status_var.set(f"Processing image {index+1}/{total} - Detected {num_rows} rows, creating {num_splits} splits")
+                    else:
+                        # Fallback to manual splits
+                        num_splits = params[0]
+                        
+                    # Create splits based on height
+                    height, width, _ = img.shape
+                    
+                    if use_row_detection and row_positions and len(row_positions) > 1:
+                        # Use detected row positions for more accurate splitting
+                        splits = []
+                        current_split_start = 0
+                        current_rows = 0
+                        
+                        # Group rows into splits
+                        for i, pos in enumerate(row_positions):
+                            current_rows += 1
+                            if current_rows >= rows_per_page and i < len(row_positions) - 1:
+                                # Add some padding above the next row
+                                split_end = pos - 10
+                                splits.append((current_split_start, split_end))
+                                current_split_start = split_end
+                                current_rows = 0
+                        
+                        # Add the final split
+                        splits.append((current_split_start, height))
+                        
+                    else:
+                        # Fallback to evenly dividing the image
+                        min_row_height = height // num_splits
+                        splits = [(i * min_row_height, (i + 1) * min_row_height) for i in range(num_splits)]
+                    
+                    # Process each split
+                    for i, (start_y, end_y) in enumerate(splits):
+                        crop_img = img[start_y:end_y, :]
+                        crop_img = remove_empty_rows_and_columns(crop_img)
+                        
+                        if not is_image_blank(crop_img):
+                            crop_img = add_outer_border(crop_img, top_border=50, bottom_border=50, left_border=10, right_border=10)
+                            crop_img = cv2.resize(crop_img, (1920, 1080))
+                            output_path = os.path.join(self.output_dir, f"{image_name}_{i}.png")
+                            cv2.imwrite(output_path, crop_img)
                     
             elif operation == 'template_remover':
                 # New operation to remove templates from images
@@ -575,14 +707,30 @@ class ImageCropperApp:
             return
             
         operation = self.operation_var.get()
+        
+        # Get splits value (as fallback)
         try:
             splits = int(self.splits_var.get())
             if splits < 1:
                 splits = 1
         except ValueError:
-            splits = 6  # Default value
-            
-        params = [splits]
+            splits = 2  # Default value
+        
+        # Get rows per page value
+        try:
+            rows_per_page = int(self.rows_per_page_var.get())
+            if rows_per_page < 1:
+                rows_per_page = 10
+        except ValueError:
+            rows_per_page = 10  # Default value
+        
+        # Build params list with all our settings
+        params = [
+            splits,  # Original splits value (as fallback)
+            self.detect_questions_var.get(),  # Question detection
+            rows_per_page,  # Rows per page
+            self.use_row_detection_var.get()  # Whether to use row detection
+        ]
         
         # Reset progress
         self.progress_var.set(0)
@@ -632,8 +780,11 @@ class ImageCropperApp:
         try:
             settings = {
                 'operation': self.operation_var.get(),
-                'splits': self.splits_var.get(),
-                'output_dir': self.output_dir
+                'rows_per_page': self.rows_per_page_var.get(),
+                'splits': self.splits_var.get(),  # Keep this for backward compatibility
+                'output_dir': self.output_dir,
+                'detect_questions': str(self.detect_questions_var.get()),
+                'use_row_detection': str(self.use_row_detection_var.get())
             }
             
             # Create config directory if it doesn't exist
@@ -663,10 +814,16 @@ class ImageCropperApp:
                                 self.operation_var.set(value)
                             elif key == 'splits':
                                 self.splits_var.set(value)
+                            elif key == 'rows_per_page':
+                                self.rows_per_page_var.set(value)
+                            elif key == 'detect_questions':
+                                self.detect_questions_var.set(value.lower() == 'true')
+                            elif key == 'use_row_detection':
+                                self.use_row_detection_var.set(value.lower() == 'true')
                             elif key == 'output_dir':
                                 if os.path.exists(value):
                                     self.output_dir = value
-                                    self.output_dir_label.config(text(self.output_dir))
+                                    self.output_dir_label.config(text=self.output_dir)
         except Exception as e:
             print(f"Error loading settings: {e}")
             
