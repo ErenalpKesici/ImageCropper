@@ -379,7 +379,8 @@ class ImageCropperApp:
         self.operation_var = tk.StringVar(value="splitter")
         operations = [("Split Images", "splitter"), 
                      ("Crop Titles", "title_cropper"),
-                     ("Remove Templates", "template_remover")]  # Add the new operation
+                     ("Remove Templates", "template_remover"),
+                     ("Remove Blank Images", "blank_remover")]  # Add new operation
         
         for text, value in operations:
             ttk.Radiobutton(operation_frame, text=text, value=value, variable=self.operation_var).pack(anchor=tk.W)
@@ -425,6 +426,20 @@ class ImageCropperApp:
             variable=self.detect_questions_var
         )
         question_checkbox.pack(anchor=tk.W, pady=(10, 0))
+
+        # Parameters for blank image detection
+        ttk.Label(param_frame, text="Blank Detection Sensitivity:").pack(anchor=tk.W, pady=(10, 0))
+        self.blank_sensitivity_var = tk.DoubleVar(value=98.0)
+        blank_sensitivity_scale = ttk.Scale(
+            param_frame, 
+            from_=85.0, 
+            to=99.5, 
+            orient="horizontal", 
+            variable=self.blank_sensitivity_var, 
+            length=150
+        )
+        blank_sensitivity_scale.pack(anchor=tk.W, pady=(0, 5), fill=tk.X)
+        ttk.Label(param_frame, text="(Higher = More aggressive blank detection)").pack(anchor=tk.W)
 
         # Preview area - will show thumbnails of selected images, with reduced height
         preview_frame = ttk.LabelFrame(main_frame, text="Preview", padding="10")
@@ -693,6 +708,32 @@ class ImageCropperApp:
                 result_pil = Image.fromarray(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB))
                 result_pil.save(output_path)
             
+            elif operation == 'blank_remover':
+                # Operation to identify and remove blank images
+                self.status_var.set(f"Processing image {index+1}/{total} - Checking if blank...")
+                
+                # Get blank detection sensitivity from slider
+                blank_threshold = self.blank_sensitivity_var.get()
+                
+                # Check if image is blank using our existing function
+                if is_image_blank(img, background_threshold=blank_threshold, std_dev_threshold=15):
+                    # If blank, move to a "blank_images" subfolder in output directory
+                    blank_dir = os.path.join(self.output_dir, "blank_images")
+                    if not os.path.exists(blank_dir):
+                        os.makedirs(blank_dir)
+                    
+                    # Use PIL to save as it handles Unicode paths better
+                    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    output_path = os.path.join(blank_dir, image_name)
+                    pil_img.save(output_path)
+                    
+                    self.status_var.set(f"Image {image_name} identified as blank")
+                else:
+                    # If not blank, save to output directory
+                    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    output_path = os.path.join(self.output_dir, image_name)
+                    pil_img.save(output_path)
+
             # Update progress
             progress = (index + 1) / total * 100
             self.progress_var.set(progress)
@@ -736,6 +777,11 @@ class ImageCropperApp:
         self.progress_var.set(0)
         self.status_var.set("Processing...")
         
+        # Add these variables before the ThreadPoolExecutor block
+        blank_count = 0
+        total_count = len(self.input_files)
+        blank_results = []
+        
         # Determine number of CPU cores for parallel processing
         num_cores = multiprocessing.cpu_count()
         max_workers = max(1, num_cores)
@@ -754,8 +800,17 @@ class ImageCropperApp:
                 )
                 futures.append(future)
                 
-        self.status_var.set("Processing complete!")
-        messagebox.showinfo("Complete", "Image processing completed successfully!")
+        # After the ThreadPoolExecutor block:
+        if operation == 'blank_remover':
+            blank_dir = os.path.join(self.output_dir, "blank_images")
+            if os.path.exists(blank_dir):
+                blank_count = len(os.listdir(blank_dir))
+                
+            self.status_var.set(f"Processing complete! Found {blank_count} blank images out of {total_count}")
+            messagebox.showinfo("Complete", f"Image processing completed!\n\n{blank_count} blank images moved to 'blank_images' folder.\n{total_count - blank_count} non-blank images kept in output folder.")
+        else:
+            self.status_var.set("Processing complete!")
+            messagebox.showinfo("Complete", "Image processing completed successfully!")
     
     def process_images(self):
         self.processing_cancelled = False
@@ -784,7 +839,9 @@ class ImageCropperApp:
                 'splits': self.splits_var.get(),  # Keep this for backward compatibility
                 'output_dir': self.output_dir,
                 'detect_questions': str(self.detect_questions_var.get()),
-                'use_row_detection': str(self.use_row_detection_var.get())
+                'use_row_detection': str(self.use_row_detection_var.get()),
+                'template_sensitivity': str(self.template_sensitivity_var.get()),
+                'blank_sensitivity': str(self.blank_sensitivity_var.get())  # Add this line
             }
             
             # Create config directory if it doesn't exist
@@ -824,6 +881,11 @@ class ImageCropperApp:
                                 if os.path.exists(value):
                                     self.output_dir = value
                                     self.output_dir_label.config(text=self.output_dir)
+                            elif key == 'blank_sensitivity':
+                                try:
+                                    self.blank_sensitivity_var.set(float(value))
+                                except ValueError:
+                                    self.blank_sensitivity_var.set(98.0)  # Default value
         except Exception as e:
             print(f"Error loading settings: {e}")
             
