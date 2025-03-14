@@ -603,8 +603,7 @@ class ImageCropperApp:
                     # Resize to desired dimensions
                     cleaned_img = cv2.resize(cleaned_img, (1920, 1080))
                     
-                    # Save with a special prefix to indicate it contains questions
-                    output_path = os.path.join(self.output_dir, f"question_{image_name}")
+                    output_path = os.path.join(self.output_dir, image_name)
                     cv2.imwrite(output_path, cleaned_img)
                 else:
                     # No questions detected, proceed with splitting based on rows
