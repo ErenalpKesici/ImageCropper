@@ -1,3 +1,4 @@
+import time
 import cv2
 import numpy as np
 import pytesseract
@@ -12,6 +13,105 @@ from tkinter import filedialog, ttk, messagebox
 from PIL import Image, ImageTk
 import threading
 import multiprocessing
+
+def generate_image_for_text(self, text, size=(512, 512)):
+    """Generate an image based on text content using Stable Diffusion locally"""
+    try:
+        import torch
+        from diffusers import StableDiffusionPipeline
+        import gc
+        
+        self.status_var.set("Loading image generation model (first time may take a while)...")
+        
+        # Set image style based on selection
+        style = self.image_style_var.get()
+        
+        # Create style-specific prompt
+        if style == "educational":
+            prompt_prefix = "Simple, clean educational graphic illustration about"
+        elif style == "photorealistic":
+            prompt_prefix = "Photorealistic image showing"
+        elif style == "cartoon":
+            prompt_prefix = "Colorful cartoon illustration depicting"
+        elif style == "abstract":
+            prompt_prefix = "Abstract conceptual artwork representing"
+        else:
+            prompt_prefix = "Simple illustration about"
+            
+        # Clean up the text for better prompts - remove special characters and limit length
+        clean_text = re.sub(r'[^\w\s]', '', text)
+        clean_text = ' '.join(clean_text.split()[:20])  # Limit to 20 words
+        
+        prompt = f"{prompt_prefix}: {clean_text}"
+        
+        # For Intel GPU, use CPU with memory optimization
+        device = "cpu"  # Start with CPU assumption
+        dtype = torch.float32
+        
+        # Check if CUDA is available (NVIDIA GPU)
+        if torch.cuda.is_available():
+            device = "cuda"
+            dtype = torch.float16
+            self.status_var.set("Using NVIDIA GPU for image generation")
+        else:
+            # Try to check if Intel's OneAPI is available
+            try:
+                import intel_extension_for_pytorch as ipex
+                device = "xpu" if hasattr(torch, 'xpu') and torch.xpu.is_available() else "cpu"
+                if device == "xpu":
+                    self.status_var.set("Using Intel GPU acceleration")
+            except ImportError:
+                self.status_var.set("Using CPU for image generation (slower)")
+        
+        # Use a smaller, faster model for generation
+        model_id = "runwayml/stable-diffusion-v1-5"  # More compatible model
+        
+        # Use low memory settings for slower devices
+        pipe = StableDiffusionPipeline.from_pretrained(
+            model_id, 
+            torch_dtype=dtype,
+            safety_checker=None  # Disable safety checker for performance
+        )
+        
+        # Apply memory optimizations
+        pipe.enable_attention_slicing()
+        
+        # Try to use Intel optimizations if available
+        if device == "xpu":
+            pipe = pipe.to(device)
+        elif device == "cuda":
+            pipe = pipe.to(device)
+        
+        # Generate the image
+        self.status_var.set("Generating image... (this may take 15-30 seconds)")
+        with torch.no_grad():
+            image = pipe(
+                prompt, 
+                num_inference_steps=25,  # Reduced steps for speed
+                height=size[1], 
+                width=size[0]
+            ).images[0]
+        
+        # Clear VRAM/memory
+        del pipe
+        gc.collect()
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        elif device == "xpu":
+            torch.xpu.empty_cache()
+            
+        # Convert to OpenCV format
+        image_array = np.array(image)
+        image_cv2 = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+        return image_cv2
+        
+    except ImportError as e:
+        messagebox.showwarning("Libraries Missing", 
+            f"Missing required libraries: {e}\n\nPlease install with:\npip install torch diffusers transformers accelerate")
+        return None
+    except Exception as e:
+        messagebox.showerror("Image Generation Error", f"Error generating image: {str(e)}")
+        return None
 
 def detect_text_rows(image, min_row_gap=10):
     """
@@ -320,8 +420,16 @@ class ImageCropperApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Image Cropper")
-        self.root.geometry("800x600")
-        self.root.minsize(800, 600)
+        self.root.geometry("800x700")  # Increase default height
+        self.root.minsize(800, 700)    # Increase minimum height
+        
+        # Create default frame for all content
+        self.main_content = ttk.Frame(self.root)
+        self.main_content.pack(fill=tk.BOTH, expand=True)
+        
+        # Create fixed frame for buttons that stays at bottom
+        self.button_area = ttk.Frame(self.root)
+        self.button_area.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
         
         self.input_files = []
         self.output_dir = os.path.join(os.getcwd(), "cropped")
@@ -336,8 +444,25 @@ class ImageCropperApp:
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
+        # Create a scrollable area for the content
+        canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Move ALL your existing code that creates UI elements to use scrollable_frame instead of main_frame
         # Input section
-        input_frame = ttk.LabelFrame(main_frame, text="Input", padding="10")
+        input_frame = ttk.LabelFrame(scrollable_frame, text="Input", padding="10")
         input_frame.pack(fill=tk.X, pady=5)
         
         self.input_files_label = ttk.Label(input_frame, text="No files selected")
@@ -354,7 +479,7 @@ class ImageCropperApp:
         select_button.pack(side=tk.LEFT, padx=5)
         
         # Output section
-        output_frame = ttk.LabelFrame(main_frame, text="Output", padding="10")
+        output_frame = ttk.LabelFrame(scrollable_frame, text="Output", padding="10")
         output_frame.pack(fill=tk.X, pady=5)
 
         self.output_dir_label = ttk.Label(output_frame, text=self.output_dir)
@@ -369,7 +494,7 @@ class ImageCropperApp:
         save_settings_button.pack(anchor=tk.W, pady=5)
         
         # Create a frame to hold operation and parameters side by side
-        op_param_container = ttk.Frame(main_frame)
+        op_param_container = ttk.Frame(scrollable_frame)
         op_param_container.pack(fill=tk.X, pady=5)
         
         # Operation section - now in left half
@@ -378,9 +503,10 @@ class ImageCropperApp:
         
         self.operation_var = tk.StringVar(value="splitter")
         operations = [("Split Images", "splitter"), 
-                     ("Crop Titles", "title_cropper"),
-                     ("Remove Templates", "template_remover"),
-                     ("Remove Blank Images", "blank_remover")]  # Add new operation
+             ("Crop Titles", "title_cropper"),
+             ("Remove Templates", "template_remover"),
+             ("Remove Blank Images", "blank_remover"),
+             ("Generate Missing Images", "image_generator")]
         
         for text, value in operations:
             ttk.Radiobutton(operation_frame, text=text, value=value, variable=self.operation_var).pack(anchor=tk.W)
@@ -441,8 +567,30 @@ class ImageCropperApp:
         blank_sensitivity_scale.pack(anchor=tk.W, pady=(0, 5), fill=tk.X)
         ttk.Label(param_frame, text="(Higher = More aggressive blank detection)").pack(anchor=tk.W)
 
+        # Parameters for image generation
+        ttk.Label(param_frame, text="AI Image Style:").pack(anchor=tk.W, pady=(10, 0))
+        self.image_style_var = tk.StringVar(value="educational")
+        styles = [("Educational", "educational"), 
+                 ("Photorealistic", "photorealistic"),
+                 ("Cartoon", "cartoon"),
+                 ("Abstract", "abstract")]
+
+        style_frame = ttk.Frame(param_frame)
+        style_frame.pack(fill=tk.X, pady=5)
+
+        # Create style options
+        for text, value in styles:
+            ttk.Radiobutton(style_frame, text=text, value=value, 
+                           variable=self.image_style_var).pack(anchor=tk.W)
+
+        # Option to set API key
+        ttk.Label(param_frame, text="OpenAI API Key (optional):").pack(anchor=tk.W, pady=(10, 0))
+        self.api_key_var = tk.StringVar()
+        api_key_entry = ttk.Entry(param_frame, textvariable=self.api_key_var, show="*")
+        api_key_entry.pack(anchor=tk.W, pady=5, fill=tk.X)
+
         # Preview area - will show thumbnails of selected images, with reduced height
-        preview_frame = ttk.LabelFrame(main_frame, text="Preview", padding="10")
+        preview_frame = ttk.LabelFrame(scrollable_frame, text="Preview", padding="10")
         preview_frame.pack(fill=tk.BOTH, expand=True, pady=1)
 
         self.preview_frame = ttk.Frame(preview_frame)
@@ -457,15 +605,15 @@ class ImageCropperApp:
         
         # Add a progress bar
         self.progress_var = tk.DoubleVar(value=0)
-        progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100)
+        progress_bar = ttk.Progressbar(scrollable_frame, variable=self.progress_var, maximum=100)
         progress_bar.pack(fill=tk.X, pady=5)
 
         self.status_var = tk.StringVar(value="Ready")
-        status_label = ttk.Label(main_frame, textvariable=self.status_var)
+        status_label = ttk.Label(scrollable_frame, textvariable=self.status_var)
         status_label.pack(anchor=tk.W, pady=5)
         
         # Add cancel button next to process button
-        button_frame = ttk.Frame(main_frame)
+        button_frame = ttk.Frame(scrollable_frame)
         button_frame.pack(fill=tk.X, pady=10)  # Added fill=tk.X
 
         process_button = ttk.Button(button_frame, text="Process Images", command=self.process_images)
@@ -479,7 +627,7 @@ class ImageCropperApp:
         open_folder_button.pack(side=tk.RIGHT, padx=5)        
         
         # Add a new section for template images that appears when "Remove Templates" is selected
-        self.templates_frame = ttk.LabelFrame(main_frame, text="Watermark/Logo Templates to Remove", padding="10")
+        self.templates_frame = ttk.LabelFrame(scrollable_frame, text="Watermark/Logo Templates to Remove", padding="10")
 
         self.template_files = []
         self.template_files_label = ttk.Label(self.templates_frame, text="No templates selected")
@@ -491,7 +639,28 @@ class ImageCropperApp:
         
         # Show/hide the templates frame based on operation selection
         self.operation_var.trace("w", self.toggle_templates_frame)
+
+        # Add this button to your params frame
+        ttk.Button(param_frame, text="Advanced Image Options", command=self.show_image_generation_options).pack(anchor=tk.W, pady=10)
         
+        # Add a fixed-position frame at the bottom for action buttons that always stay visible
+        button_container = ttk.Frame(self.root)
+        button_container.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+        
+        # Move your buttons to this new container
+        button_frame = ttk.Frame(button_container)
+        button_frame.pack(fill=tk.X)
+        
+        process_button = ttk.Button(button_frame, text="Process Images", command=self.process_images)
+        process_button.pack(side=tk.LEFT, padx=5)
+        
+        self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_processing, state=tk.DISABLED)
+        self.cancel_button.pack(side=tk.LEFT, padx=5)
+        
+        # Open output folder button - move to button_frame
+        open_folder_button = ttk.Button(button_frame, text="Open Output Folder", command=self.open_output_folder)
+        open_folder_button.pack(side=tk.RIGHT, padx=5)
+
     def select_files(self):
         filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff")]
         files = filedialog.askopenfilenames(filetypes=filetypes)
@@ -733,6 +902,65 @@ class ImageCropperApp:
                     output_path = os.path.join(self.output_dir, image_name)
                     pil_img.save(output_path)
 
+            elif operation == 'image_generator':
+                # Operation to generate and insert images where appropriate
+                self.status_var.set(f"Processing image {index+1}/{total} - Analyzing for image placement...")
+                
+                try:
+                    # Extract text from the slide
+                    ocr_text = pytesseract.image_to_string(img, config=custom_config)
+                    
+                    # Skip if the text is very short (likely not enough content to generate from)
+                    if len(ocr_text.strip()) < 20:
+                        self.status_var.set(f"Image {index+1}/{total} - Not enough text for generation")
+                        # Just save the original image
+                        output_path = os.path.join(self.output_dir, image_name)
+                        cv2.imwrite(output_path, img)
+                        return
+                        
+                    # Find space for an image
+                    rect, corners = self.analyze_slide_for_image_placement(img)
+                    
+                    if rect:
+                        # We found space for an image
+                        x, y, w, h = rect
+                        
+                        # Show message about space found
+                        self.status_var.set(f"Image {index+1}/{total} - Found space ({w}x{h}) for image generation")
+                        self.root.update()  # Force UI update
+                        
+                        # Generate an image based on the text
+                        generated_image = self.generate_image_for_text(ocr_text, size=(w, h))
+                        
+                        if generated_image is not None:
+                            # Resize the generated image to fit the target space
+                            generated_image = cv2.resize(generated_image, (w, h))
+                            
+                            # Create a copy of the original image
+                            result_img = img.copy()
+                            
+                            # Insert the generated image
+                            result_img[y:y+h, x:x+w] = generated_image
+                            
+                            # Save the result
+                            output_path = os.path.join(self.output_dir, f"enhanced_{image_name}")
+                            cv2.imwrite(output_path, result_img)
+                            
+                            self.status_var.set(f"Added AI-generated image to {image_name}")
+                        else:
+                            # Failed to generate image, save original
+                            output_path = os.path.join(self.output_dir, image_name)
+                            cv2.imwrite(output_path, img)
+                    else:
+                        # No suitable space for an image
+                        self.status_var.set(f"Image {index+1}/{total} - No suitable space found for image")
+                        output_path = os.path.join(self.output_dir, image_name)
+                        cv2.imwrite(output_path, img)
+                except Exception as e:
+                    print(f"Error in image generation: {e}")
+                    output_path = os.path.join(self.output_dir, image_name)
+                    cv2.imwrite(output_path, img)
+
             # Update progress
             progress = (index + 1) / total * 100
             self.progress_var.set(progress)
@@ -861,7 +1089,7 @@ class ImageCropperApp:
         """Load saved settings"""
         try:
             config_file = os.path.join(os.path.expanduser("~"), ".imagecropper", "settings.txt")
-            if os.path.exists(config_file):
+            if (os.path.exists(config_file)):
                 with open(config_file, 'r') as f:
                     for line in f:
                         if '=' in line:
@@ -1000,6 +1228,101 @@ class ImageCropperApp:
             messagebox.showwarning("Libraries Missing", 
                 "For AI-powered removal, install: pip install torch diffusers transformers")
             return cv2.inpaint(image, mask, 7, cv2.INPAINT_TELEA)  # Fallback
+
+    def show_image_generation_options(self):
+        """Show a dialog with additional image generation options"""
+        options_dialog = tk.Toplevel(self.root)
+        options_dialog.title("Image Generation Options")
+        options_dialog.geometry("400x300")
+        options_dialog.transient(self.root)
+        options_dialog.grab_set()
+        
+        ttk.Label(options_dialog, text="Model Selection:").pack(anchor=tk.W, padx=10, pady=(10, 0))
+        
+        model_var = tk.StringVar(value="runwayml/stable-diffusion-v1-5")
+        models = [
+            ("Stable Diffusion 1.5 (Faster)", "runwayml/stable-diffusion-v1-5"),
+            ("Stable Diffusion 2.1 (Better Quality)", "stabilityai/stable-diffusion-2-1")
+        ]
+        
+        for text, value in models:
+            ttk.Radiobutton(options_dialog, text=text, value=value, variable=model_var).pack(anchor=tk.W, padx=20)
+        
+        ttk.Label(options_dialog, text="Image Quality:").pack(anchor=tk.W, padx=10, pady=(10, 0))
+        
+        quality_var = tk.IntVar(value=25)
+        quality_scale = ttk.Scale(
+            options_dialog, 
+            from_=15, 
+            to=50, 
+            orient="horizontal", 
+            variable=quality_var, 
+            length=300
+        )
+        quality_scale.pack(padx=10, pady=5, fill=tk.X)
+        ttk.Label(options_dialog, text="Higher = Better quality but slower").pack(anchor=tk.W, padx=10)
+        
+        def save_options():
+            self.image_model_var = model_var.get()
+            self.image_quality_var = quality_var.get()
+            options_dialog.destroy()
+        
+        ttk.Button(options_dialog, text="Save Options", command=save_options).pack(pady=20)
+        
+        # Add this button to your params frame
+        # ttk.Button(param_frame, text="Advanced Image Options", command=self.show_image_generation_options).pack(anchor=tk.W, pady=10)
+
+    def analyze_slide_for_image_placement(self, image):
+        """Analyze a slide to find the best place to insert an AI-generated image"""
+        # Convert to grayscale for text detection
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Use OCR to find text areas
+        custom_config = r'--oem 3 --psm 6'
+        d = pytesseract.image_to_data(image, config=custom_config, output_type=Output.DICT)
+        
+        height, width = image.shape[:2]
+        
+        # Create a mask for text areas with padding
+        text_mask = np.zeros((height, width), dtype=np.uint8)
+        padding = 20  # Padding around text
+        
+        for i in range(len(d['text'])):
+            if d['text'][i].strip() != '':
+                x, y, w, h = d['left'][i], d['top'][i], d['width'][i], d['height'][i]
+                # Add padding
+                x_start = max(0, x - padding)
+                y_start = max(0, y - padding)
+                x_end = min(width, x + w + padding)
+                y_end = min(height, y + h + padding)
+                text_mask[y_start:y_end, x_start:x_end] = 255
+        
+        # Find the largest contiguous non-text area
+        empty_mask = 255 - text_mask
+        contours, _ = cv2.findContours(empty_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return None, None
+            
+        # Find the largest contour by area
+        largest_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        
+        # Calculate the maximum square that fits in this rectangle
+        size = min(w, h)
+        
+        # If the space is too small, return None
+        if size < 200:  # Minimum size for a useful image
+            return None, None
+            
+        # Center the square in the available space
+        x_center = x + w // 2
+        y_center = y + h // 2
+        
+        x_start = x_center - size // 2
+        y_start = y_center - size // 2
+        
+        return (x_start, y_start, size, size), (x_start, y_start, x_start + size, y_start + size)
 
 if __name__ == "__main__":
     root = tk.Tk()
