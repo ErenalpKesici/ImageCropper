@@ -113,58 +113,19 @@ def generate_image_for_text(self, text, size=(512, 512)):
         messagebox.showerror("Image Generation Error", f"Error generating image: {str(e)}")
         return None
 
-def detect_text_rows(image, min_row_gap=10):
-    """
-    Detect the number of text rows in an image by analyzing OCR data
-    Returns the number of rows and the row positions
-    """
-    # OCR configuration - use a fast mode since we only need layout
-    custom_config = r'--oem 3 --psm 6'
-    d = pytesseract.image_to_data(image, config=custom_config, output_type=Output.DICT)
-    
-    # Get all text bounding boxes
-    boxes = []
+def detect_text_rows(d):
+    num_of_rows = 0
+    last_top = 0
     for i in range(len(d['text'])):
         # Skip empty results
         if d['text'][i].strip() == '':
             continue
+        if d['top'][i] > last_top: 
+            num_of_rows += 1
             
-        # Get the coordinates of this text box
-        x, y, w, h = d['left'][i], d['top'][i], d['width'][i], d['height'][i]
-        boxes.append((x, y, w, h))
-    
-    if not boxes:
-        return 1, []  # No text found, assume 1 row
-    
-    # Sort boxes by vertical position
-    boxes.sort(key=lambda box: box[1])  # Sort by y-coordinate
-    
-    # Group boxes into rows based on vertical position
-    rows = []
-    current_row = [boxes[0]]
-    current_row_bottom = boxes[0][1] + boxes[0][3]  # y + height
-    
-    for box in boxes[1:]:
-        y = box[1]
-        # If this box is significantly below the previous row, start a new row
-        if y > current_row_bottom + min_row_gap:
-            rows.append(current_row)
-            current_row = [box]
-            current_row_bottom = box[1] + box[3]
-        else:
-            # Add to current row and update row bottom if needed
-            current_row.append(box)
-            box_bottom = box[1] + box[3]
-            if box_bottom > current_row_bottom:
-                current_row_bottom = box_bottom
-    
-    # Add the last row if it exists
-    if current_row:
-        rows.append(current_row)
-    
-    # Return the number of rows and the row positions (y-coordinate of each row's top)
-    row_positions = [min(box[1] for box in row) for row in rows]
-    return len(rows), row_positions
+        last_top = d['top'][i]
+    return last_top
+
 
 def contains_question_indicators(text):
     """
@@ -778,47 +739,39 @@ class ImageCropperApp:
                     # No questions detected, proceed with splitting based on rows
                     
                     # Get the number of rows if auto-detection is enabled
-                    if use_row_detection:
+                    if 0 and use_row_detection:
                         self.status_var.set(f"Processing image {index+1}/{total} - Detecting text rows...")
-                        num_rows, row_positions = detect_text_rows(img)
+                        num_rows, row_positions = detect_text_rows(d)
                         
                         # Calculate number of splits based on rows per page
                         num_splits = max(1, (num_rows + rows_per_page - 1) // rows_per_page)
                         self.status_var.set(f"Processing image {index+1}/{total} - Detected {num_rows} rows, creating {num_splits} splits")
                     else:
                         # Fallback to manual splits
-                        num_splits = params[0]
+                        num_splits =4
                         
                     # Create splits based on height
                     height, width, _ = img.shape
                     
-                    if use_row_detection and row_positions and len(row_positions) > 1:
-                        # Use detected row positions for more accurate splitting
-                        splits = []
-                        current_split_start = 0
-                        current_rows = 0
-                        
-                        # Group rows into splits
-                        for i, pos in enumerate(row_positions):
-                            current_rows += 1
-                            if current_rows >= rows_per_page and i < len(row_positions) - 1:
-                                # Add some padding above the next row
-                                split_end = pos - 10
-                                splits.append((current_split_start, split_end))
-                                current_split_start = split_end
-                                current_rows = 0
-                        
-                        # Add the final split
-                        splits.append((current_split_start, height))
+                    if 0 and use_row_detection and row_positions and len(row_positions) > 1:
+                        print('no')
                         
                     else:
-                        # Fallback to evenly dividing the image
                         min_row_height = height // num_splits
-                        splits = [(i * min_row_height, (i + 1) * min_row_height) for i in range(num_splits)]
-                    
-                    # Process each split
-                    for i, (start_y, end_y) in enumerate(splits):
-                        crop_img = img[start_y:end_y, :]
+
+                    current_top = min_row_height
+                    previous_top = 0
+                    i = 0
+                    while i < num_splits:
+                        for j in range(len(d['top'])):
+                            if d['top'][j] > current_top:
+                                break
+                            if d['text'][j] == '':
+                                continue
+                            if d['top'][j] + d['height'][j] > current_top:
+                                current_top = d['top'][j] + d['height'][j]
+                        
+                        crop_img = img[previous_top:current_top, :]
                         crop_img = remove_empty_rows_and_columns(crop_img)
                         
                         if not is_image_blank(crop_img):
@@ -826,7 +779,11 @@ class ImageCropperApp:
                             crop_img = cv2.resize(crop_img, (1920, 1080))
                             output_path = os.path.join(self.output_dir, f"{image_name}_{i}.png")
                             cv2.imwrite(output_path, crop_img)
-                    
+                        
+                        previous_top = current_top
+                        current_top += min_row_height
+                        i += 1
+
             elif operation == 'template_remover':
                 # New operation to remove templates from images
                 result_img = img.copy()
@@ -1063,7 +1020,7 @@ class ImageCropperApp:
             settings = {
                 'operation': self.operation_var.get(),
                 'rows_per_page': self.rows_per_page_var.get(),
-                'splits': self.splits_var.get(),  # Keep this for backward compatibility
+                # 'splits': self.splits_var.get(),  # Keep this for backward compatibility
                 'output_dir': self.output_dir,
                 'detect_questions': str(self.detect_questions_var.get()),
                 'use_row_detection': str(self.use_row_detection_var.get()),
@@ -1096,14 +1053,14 @@ class ImageCropperApp:
                             key, value = line.strip().split('=', 1)
                             if key == 'operation':
                                 self.operation_var.set(value)
-                            elif key == 'splits':
-                                self.splits_var.set(value)
+                            # elif key == 'splits':
+                            #     self.splits_var.set(value)
                             elif key == 'rows_per_page':
                                 self.rows_per_page_var.set(value)
                             elif key == 'detect_questions':
                                 self.detect_questions_var.set(value.lower() == 'true')
-                            elif key == 'use_row_detection':
-                                self.use_row_detection_var.set(value.lower() == 'true')
+                            # elif key == 'use_row_detection':
+                            #     self.use_row_detection_var.set(value.lower() == 'true')
                             elif key == 'output_dir':
                                 if os.path.exists(value):
                                     self.output_dir = value
