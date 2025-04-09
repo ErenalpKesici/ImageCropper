@@ -13,105 +13,10 @@ from tkinter import filedialog, ttk, messagebox
 from PIL import Image, ImageTk
 import threading
 import multiprocessing
-
-def generate_image_for_text(self, text, size=(512, 512)):
-    """Generate an image based on text content using Stable Diffusion locally"""
-    try:
-        import torch
-        from diffusers import StableDiffusionPipeline
-        import gc
-        
-        self.status_var.set("Loading image generation model (first time may take a while)...")
-        
-        # Set image style based on selection
-        style = self.image_style_var.get()
-        
-        # Create style-specific prompt
-        if style == "educational":
-            prompt_prefix = "Simple, clean educational graphic illustration about"
-        elif style == "photorealistic":
-            prompt_prefix = "Photorealistic image showing"
-        elif style == "cartoon":
-            prompt_prefix = "Colorful cartoon illustration depicting"
-        elif style == "abstract":
-            prompt_prefix = "Abstract conceptual artwork representing"
-        else:
-            prompt_prefix = "Simple illustration about"
-            
-        # Clean up the text for better prompts - remove special characters and limit length
-        clean_text = re.sub(r'[^\w\s]', '', text)
-        clean_text = ' '.join(clean_text.split()[:20])  # Limit to 20 words
-        
-        prompt = f"{prompt_prefix}: {clean_text}"
-        
-        # For Intel GPU, use CPU with memory optimization
-        device = "cpu"  # Start with CPU assumption
-        dtype = torch.float32
-        
-        # Check if CUDA is available (NVIDIA GPU)
-        if torch.cuda.is_available():
-            device = "cuda"
-            dtype = torch.float16
-            self.status_var.set("Using NVIDIA GPU for image generation")
-        else:
-            # Try to check if Intel's OneAPI is available
-            try:
-                import intel_extension_for_pytorch as ipex
-                device = "xpu" if hasattr(torch, 'xpu') and torch.xpu.is_available() else "cpu"
-                if device == "xpu":
-                    self.status_var.set("Using Intel GPU acceleration")
-            except ImportError:
-                self.status_var.set("Using CPU for image generation (slower)")
-        
-        # Use a smaller, faster model for generation
-        model_id = "runwayml/stable-diffusion-v1-5"  # More compatible model
-        
-        # Use low memory settings for slower devices
-        pipe = StableDiffusionPipeline.from_pretrained(
-            model_id, 
-            torch_dtype=dtype,
-            safety_checker=None  # Disable safety checker for performance
-        )
-        
-        # Apply memory optimizations
-        pipe.enable_attention_slicing()
-        
-        # Try to use Intel optimizations if available
-        if device == "xpu":
-            pipe = pipe.to(device)
-        elif device == "cuda":
-            pipe = pipe.to(device)
-        
-        # Generate the image
-        self.status_var.set("Generating image... (this may take 15-30 seconds)")
-        with torch.no_grad():
-            image = pipe(
-                prompt, 
-                num_inference_steps=25,  # Reduced steps for speed
-                height=size[1], 
-                width=size[0]
-            ).images[0]
-        
-        # Clear VRAM/memory
-        del pipe
-        gc.collect()
-        if device == "cuda":
-            torch.cuda.empty_cache()
-        elif device == "xpu":
-            torch.xpu.empty_cache()
-            
-        # Convert to OpenCV format
-        image_array = np.array(image)
-        image_cv2 = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-        return image_cv2
-        
-    except ImportError as e:
-        messagebox.showwarning("Libraries Missing", 
-            f"Missing required libraries: {e}\n\nPlease install with:\npip install torch diffusers transformers accelerate")
-        return None
-    except Exception as e:
-        messagebox.showerror("Image Generation Error", f"Error generating image: {str(e)}")
-        return None
+import requests
+import io
+import urllib.parse
+import random
 
 def detect_text_rows(d):
     num_of_rows = 0
@@ -377,6 +282,94 @@ def remove_template_from_image(image, template, threshold=0.4, max_matches=20):
     
     return result_image
 
+def ensure_dimensions_divisible_by_8(rect):
+    """Adjust rectangle dimensions to ensure width and height are divisible by 8 for AI models"""
+    x, y, w, h = rect
+    
+    # Calculate the closest dimensions divisible by 8
+    adjusted_w = (w // 8) * 8
+    adjusted_h = (h // 8) * 8
+    
+    # If rounding down makes the dimensions too small, round up instead
+    if adjusted_w < w - 4:
+        adjusted_w += 8
+    if adjusted_h < h - 4:
+        adjusted_h += 8
+    
+    # Center the adjusted rectangle in the original space
+    x_offset = (w - adjusted_w) // 2
+    y_offset = (h - adjusted_h) // 2
+    
+    adjusted_x = x + x_offset
+    adjusted_y = y + y_offset
+    
+    return (adjusted_x, adjusted_y, adjusted_w, adjusted_h)
+
+def search_google_images(self, query, min_width=300, min_height=300):
+    """Use Google Custom Search API to find images"""
+    try:
+        api_key = os.environ.get("GOOGLE_API_KEY", "")
+        cx = os.environ.get("GOOGLE_SEARCH_CX", "")
+        
+        if not api_key or not cx:
+            return None
+            
+        self.status_var.set(f"Searching for images using Google: {query}")
+        
+        search_url = "https://www.googleapis.com/customsearch/v1"
+
+        params = {
+            "key": api_key,
+            "cx": cx,
+            "q": query,
+            "searchType": "image",
+            "num": 10,
+            "imgSize": "large",
+            "rights": "cc_publicdomain,cc_attribute,cc_sharealike"
+        }
+        print(params)
+        response = requests.get(search_url, params=params)
+        response.raise_for_status()
+        search_results = response.json()
+        
+        # Filter for minimum dimensions if metadata is available
+        candidates = []
+        for item in search_results.get("items", []):
+            if "image" in item:
+                width = int(item["image"].get("width", 0))
+                height = int(item["image"].get("height", 0))
+                if width >= min_width and height >= min_height:
+                    candidates.append(item)
+        
+        # If no suitable candidates, use any results
+        if not candidates and "items" in search_results:
+            candidates = search_results["items"]
+        
+        if not candidates:
+            return None
+            
+        # Pick a random image from the top results
+        selected_image = random.choice(candidates[:5]) if len(candidates) >= 5 else candidates[0]
+        
+        # Download the image
+        img_url = selected_image["link"]
+        img_response = requests.get(img_url, timeout=5)
+        img_response.raise_for_status()
+        
+        # Convert to OpenCV format
+        img_array = np.asarray(bytearray(img_response.content), dtype=np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            return None
+            
+        self.status_var.set("Found image via Google Custom Search")
+        return img
+            
+    except Exception as e:
+        print(f"Google image search error: {e}")
+        return None
+
 class ImageCropperApp:
     def __init__(self, root):
         self.root = root
@@ -550,6 +543,35 @@ class ImageCropperApp:
         api_key_entry = ttk.Entry(param_frame, textvariable=self.api_key_var, show="*")
         api_key_entry.pack(anchor=tk.W, pady=5, fill=tk.X)
 
+        # Add API key options for image search
+        ttk.Label(param_frame, text="Image Search API Keys:").pack(anchor=tk.W, pady=(10, 0))
+        
+        # Bing Search API Key
+        api_key_frame = ttk.Frame(param_frame)
+        api_key_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(api_key_frame, text="Bing API Key:").pack(side=tk.LEFT)
+        self.bing_api_key_var = tk.StringVar()
+        bing_api_entry = ttk.Entry(api_key_frame, textvariable=self.bing_api_key_var, show="*", width=20)
+        bing_api_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+        
+        # Add option to choose between web search and AI generation
+        self.image_source_var = tk.StringVar(value="web_first")
+        image_source_frame = ttk.Frame(param_frame)
+        image_source_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(image_source_frame, text="Image Source:").pack(anchor=tk.W)
+        
+        sources = [
+            ("Web Search First, then AI (recommended)", "web_first"),
+            ("AI Generation Only", "ai_only"),
+            ("Web Search Only", "web_only")
+        ]
+        
+        for text, value in sources:
+            ttk.Radiobutton(image_source_frame, text=text, value=value, 
+                          variable=self.image_source_var).pack(anchor=tk.W)
+
         # Preview area - will show thumbnails of selected images, with reduced height
         preview_frame = ttk.LabelFrame(scrollable_frame, text="Preview", padding="10")
         preview_frame.pack(fill=tk.BOTH, expand=True, pady=1)
@@ -651,6 +673,7 @@ class ImageCropperApp:
                 img = Image.open(self.input_files[i])
                 img.thumbnail((150, 150))
                 photo = ImageTk.PhotoImage(img)
+                
                 self.thumbnail_refs.append(photo)
                 
                 frame = ttk.Frame(self.preview_frame)
@@ -666,7 +689,264 @@ class ImageCropperApp:
         
         self.preview_frame.update_idletasks()
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
-        
+
+    def generate_image_for_text(self, text, size=(512, 512)):
+        """Generate an image based on text content, prioritizing web search before AI generation"""
+        try:
+            self.status_var.set("Searching for images on the web...")
+            
+            # Clean the text for better search results
+            clean_text = re.sub(r'[^\w\s]', '', text)
+            clean_text = ' '.join(clean_text.split()[:10])  # Limit to 10 words for search
+            
+            # Try to get image from web search first
+            web_image = self.search_web_image(clean_text)
+            
+            if web_image is not None:
+                self.status_var.set("Found image from web search!")
+                return web_image
+                
+            # If web search fails, fall back to AI generation
+            self.status_var.set("No suitable images found online. Falling back to AI generation...")
+            
+            # Set custom HF_HOME path before importing huggingface libraries
+            import os
+            
+            # Specify a different drive location for cache
+            custom_cache_dir = "D:/ml_cache/huggingface"  # Change this to your preferred location
+            os.environ["HF_HOME"] = custom_cache_dir
+            import torch
+            from diffusers import StableDiffusionPipeline
+            import gc
+            
+            # Set image style based on selection
+            style = self.image_style_var.get()
+            
+            # Create style-specific prompt
+            if style == "educational":
+                prompt_prefix = "Simple, clean educational graphic illustration about"
+            elif style == "photorealistic":
+                prompt_prefix = "Photorealistic image showing"
+            elif style == "cartoon":
+                prompt_prefix = "Colorful cartoon illustration depicting"
+            elif style == "abstract":
+                prompt_prefix = "Abstract conceptual artwork representing"
+            else:
+                prompt_prefix = "Simple illustration about"
+                
+            # Clean up the text for better prompts - remove special characters and limit length
+            clean_text = re.sub(r'[^\w\s]', '', text)
+            clean_text = ' '.join(clean_text.split()[:20])  # Limit to 20 words
+            
+            prompt = f"{prompt_prefix}: {clean_text}"
+            
+            # For Intel GPU, use CPU with memory optimization
+            device = "cpu"  # Start with CPU assumption
+            dtype = torch.float32
+            
+            # Check if CUDA is available (NVIDIA GPU)
+            if torch.cuda.is_available():
+                device = "cuda"
+                dtype = torch.float16
+                self.status_var.set("Using NVIDIA GPU for image generation")
+            else:
+                # Try to check if Intel's OneAPI is available
+                try:
+                    import intel_extension_for_pytorch as ipex
+                    device = "xpu" if hasattr(torch, 'xpu') and torch.xpu.is_available() else "cpu"
+                    if device == "xpu":
+                        self.status_var.set("Using Intel GPU acceleration")
+                except ImportError:
+                    self.status_var.set("Using CPU for image generation (slower)")
+            
+            # Use a smaller, faster model for generation
+            model_id = "runwayml/stable-diffusion-v1-5"  # More compatible model
+            
+            # Use low memory settings for slower devices
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_id, 
+                torch_dtype=dtype,
+                safety_checker=None  # Disable safety checker for performance
+            )
+            
+            # Apply memory optimizations
+            pipe.enable_attention_slicing()
+            
+            # Try to use Intel optimizations if available
+            if device == "xpu":
+                pipe = pipe.to(device)
+            elif device == "cuda":
+                pipe = pipe.to(device)
+            
+            # Generate the image
+            self.status_var.set("Generating image... (this may take 15-30 seconds)")
+            with torch.no_grad():
+                image = pipe(
+                    prompt, 
+                    num_inference_steps=25,  # Reduced steps for speed
+                    height=size[1], 
+                    width=size[0]
+                ).images[0]
+            
+            # Clear VRAM/memory
+            del pipe
+            gc.collect()
+            if device == "cuda":
+                torch.cuda.empty_cache()
+            elif device == "xpu":
+                torch.xpu.empty_cache()
+                
+            # Convert to OpenCV format
+            image_array = np.array(image)
+            image_cv2 = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+            return image_cv2
+            
+        except ImportError as e:
+            messagebox.showwarning("Libraries Missing", 
+                f"Missing required libraries: {e}\n\nPlease install with:\npip install torch diffusers transformers accelerate")
+            return None
+        except Exception as e:
+            messagebox.showerror("Image Generation Error", f"Error generating image: {str(e)}")
+            return None
+
+    def search_web_image(self, query, min_width=300, min_height=300):
+        """Search for images on the web using available APIs"""
+        try:
+            self.status_var.set(f"Searching for images related to: {query}")
+            
+            # Try different search engines based on what's configured
+            if hasattr(self, 'bing_api_key_var') and self.bing_api_key_var.get():
+                # If Bing API key is provided, try the Bing Image Search API
+                result = self.search_bing_images(query, min_width, min_height)
+                if result is not None:
+                    return result
+                    
+            # Try Google Custom Search API if available
+            google_result = search_google_images(self, query, min_width, min_height)
+            if google_result is not None:
+                return google_result
+                
+            # Fallback to a simple web scraper approach if no API keys worked
+            return self.search_web_images_simple(query, min_width, min_height)
+        except Exception as e:
+            print(f"Error in web image search: {e}")
+            return None
+
+    def search_bing_images(self, query, min_width=300, min_height=300):
+        """Use Bing Image Search API to find images"""
+        try:
+            subscription_key = self.api_key_var.get()
+            if not subscription_key:
+                return None
+                
+            search_url = "https://api.bing.microsoft.com/v7.0/images/search"
+            
+            headers = {"Ocp-Apim-Subscription-Key": subscription_key}
+            params = {
+                "q": query,
+                "license": "public",  # Filter for public domain images
+                "imageType": "photo",
+                "count": 10
+            }
+            
+            response = requests.get(search_url, headers=headers, params=params)
+            response.raise_for_status()
+            search_results = response.json()
+            
+            # Filter images by minimum dimensions
+            valid_images = [img for img in search_results.get("value", []) 
+                            if img.get("width", 0) >= min_width and 
+                            img.get("height", 0) >= min_height]
+            
+            if not valid_images:
+                return None
+                
+            # Pick a random image from the top results
+            selected_image = random.choice(valid_images[:5]) if len(valid_images) >= 5 else valid_images[0]
+            
+            # Download the image
+            img_url = selected_image["contentUrl"]
+            img_response = requests.get(img_url, timeout=5)
+            img_response.raise_for_status()
+            
+            # Convert to OpenCV format
+            img_array = np.asarray(bytearray(img_response.content), dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            
+            if img is None:
+                return None
+                
+            return img
+            
+        except Exception as e:
+            print(f"Bing image search error: {e}")
+            return None
+
+    def search_web_images_simple(self, query, min_width=300, min_height=300):
+        """A simpler fallback method to get images without API requirements"""
+        try:
+            # Use Unsplash API for free images
+            encoded_query = urllib.parse.quote(query)
+            url = f"https://api.unsplash.com/search/photos?query={encoded_query}&per_page=10"
+            
+            # Check if we have a client ID for Unsplash
+            client_id = os.environ.get("UNSPLASH_CLIENT_ID", "")
+            
+            if client_id:
+                headers = {"Authorization": f"Client-ID {client_id}"}
+                response = requests.get(url, headers=headers)
+            else:
+                # If no Unsplash API, try to use Pixabay which has some free API access
+                pixabay_key = os.environ.get("PIXABAY_API_KEY", "")
+                if pixabay_key:
+                    url = f"https://pixabay.com/api/?key={pixabay_key}&q={encoded_query}&image_type=photo&per_page=10"
+                    response = requests.get(url)
+                else:
+                    # Last resort - try to use a search engine but this might not work reliably
+                    self.status_var.set("No image API keys found. Set UNSPLASH_CLIENT_ID or PIXABAY_API_KEY in environment variables for better results.")
+                    return None
+                    
+            response.raise_for_status()
+            data = response.json()
+            
+            # Extract image URLs
+            if "results" in data:  # Unsplash response format
+                images = data["results"]
+                if not images:
+                    return None
+                    
+                # Select a random image from top results
+                selected = random.choice(images[:5]) if len(images) >= 5 else images[0]
+                img_url = selected["urls"]["regular"]
+                
+            elif "hits" in data:  # Pixabay response format
+                images = data["hits"]
+                if not images:
+                    return None
+                    
+                # Select a random image from top results
+                selected = random.choice(images[:5]) if len(images) >= 5 else images[0]
+                img_url = selected["webformatURL"]
+            else:
+                return None
+                
+            # Download the selected image
+            img_response = requests.get(img_url, timeout=5)
+            img_response.raise_for_status()
+            
+            # Convert to OpenCV format
+            img_array = np.asarray(bytearray(img_response.content), dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            
+            if img is None or img.shape[0] < min_height or img.shape[1] < min_width:
+                return None
+                
+            return img
+            
+        except Exception as e:
+            print(f"Simple web image search error: {e}")
+            return None
+
     def process_single_image(self, image_path, operation, params, index, total):
         try:
             # Make sure output directory exists
@@ -693,7 +973,7 @@ class ImageCropperApp:
                 current_top = 0
                 line_count_to_crop = 0
                 for i in range(len(d['text'])):
-                    if (d['text'][i] == '' or d['text'][i].isupper() or not d['text'][i].isalnum()) and (current_top == 0 or d['top'][i] - current_top < 10):
+                    if (d['text'][i] == '' or d['text'][i].isupper() or not d['text'][i].isalnum()) and (current_top == 0 or d['text'][i] - current_top < 10):
                         current_title += d['text'][i]
                         current_top = d['top'][i]
                         line_count_to_crop += 1
@@ -748,7 +1028,7 @@ class ImageCropperApp:
                         self.status_var.set(f"Processing image {index+1}/{total} - Detected {num_rows} rows, creating {num_splits} splits")
                     else:
                         # Fallback to manual splits
-                        num_splits =4
+                        num_splits = 2
                         
                     # Create splits based on height
                     height, width, _ = img.shape
@@ -882,12 +1162,29 @@ class ImageCropperApp:
                         # We found space for an image
                         x, y, w, h = rect
                         
+                        # Ensure dimensions are compatible with AI models (divisible by 8)
+                        x, y, w, h = ensure_dimensions_divisible_by_8((x, y, w, h))
+                        
                         # Show message about space found
-                        self.status_var.set(f"Image {index+1}/{total} - Found space ({w}x{h}) for image generation")
+                        self.status_var.set(f"Image {index+1}/{total} - Found space ({w}x{h}) for image")
                         self.root.update()  # Force UI update
                         
-                        # Generate an image based on the text
-                        generated_image = self.generate_image_for_text(ocr_text, size=(w, h))
+                        # Check image source preference
+                        image_source = self.image_source_var.get()
+                        generated_image = None
+                        print(ocr_text)
+                        if image_source == "web_only":
+                            # Only use web search
+                            generated_image = self.search_web_image(ocr_text, min_width=w//2, min_height=h//2)
+                        elif image_source == "ai_only":
+                            # Only use AI generation
+                            generated_image = self.generate_image_for_text(ocr_text, size=(w, h))
+                        else:  # web_first
+                            # Try web search first, then fall back to AI
+                            generated_image = self.search_web_image(ocr_text, min_width=w//2, min_height=h//2)
+                            if generated_image is None:
+                                self.status_var.set("No suitable web images found, using AI generation...")
+                                generated_image = self.generate_image_for_text(ocr_text, size=(w, h))
                         
                         if generated_image is not None:
                             # Resize the generated image to fit the target space
@@ -903,11 +1200,12 @@ class ImageCropperApp:
                             output_path = os.path.join(self.output_dir, f"enhanced_{image_name}")
                             cv2.imwrite(output_path, result_img)
                             
-                            self.status_var.set(f"Added AI-generated image to {image_name}")
+                            self.status_var.set(f"Added image to {image_name}")
                         else:
-                            # Failed to generate image, save original
+                            # Failed to find or generate image, save original
                             output_path = os.path.join(self.output_dir, image_name)
                             cv2.imwrite(output_path, img)
+                            self.status_var.set(f"Could not find or generate a suitable image")
                     else:
                         # No suitable space for an image
                         self.status_var.set(f"Image {index+1}/{total} - No suitable space found for image")
@@ -1020,12 +1318,17 @@ class ImageCropperApp:
             settings = {
                 'operation': self.operation_var.get(),
                 'rows_per_page': self.rows_per_page_var.get(),
-                # 'splits': self.splits_var.get(),  # Keep this for backward compatibility
                 'output_dir': self.output_dir,
                 'detect_questions': str(self.detect_questions_var.get()),
                 'use_row_detection': str(self.use_row_detection_var.get()),
                 'template_sensitivity': str(self.template_sensitivity_var.get()),
-                'blank_sensitivity': str(self.blank_sensitivity_var.get())  # Add this line
+                'blank_sensitivity': str(self.blank_sensitivity_var.get()),
+                # Add API key storage
+                'unsplash_api_key': os.environ.get("UNSPLASH_CLIENT_ID", ""),
+                'pixabay_api_key': os.environ.get("PIXABAY_API_KEY", ""),
+                'bing_api_key': self.bing_api_key_var.get() if hasattr(self, 'bing_api_key_var') else "",
+                'google_api_key': os.environ.get("GOOGLE_API_KEY", ""),
+                'google_cx': os.environ.get("GOOGLE_SEARCH_CX", "")
             }
             
             # Create config directory if it doesn't exist
@@ -1038,7 +1341,7 @@ class ImageCropperApp:
                 for key, value in settings.items():
                     f.write(f"{key}={value}\n")
                     
-            messagebox.showinfo("Settings Saved", "Default settings have been saved.")
+            messagebox.showinfo("Settings Saved", "Default settings and API keys have been saved.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save settings: {e}")
     
@@ -1053,14 +1356,10 @@ class ImageCropperApp:
                             key, value = line.strip().split('=', 1)
                             if key == 'operation':
                                 self.operation_var.set(value)
-                            # elif key == 'splits':
-                            #     self.splits_var.set(value)
                             elif key == 'rows_per_page':
                                 self.rows_per_page_var.set(value)
                             elif key == 'detect_questions':
                                 self.detect_questions_var.set(value.lower() == 'true')
-                            # elif key == 'use_row_detection':
-                            #     self.use_row_detection_var.set(value.lower() == 'true')
                             elif key == 'output_dir':
                                 if os.path.exists(value):
                                     self.output_dir = value
@@ -1070,6 +1369,20 @@ class ImageCropperApp:
                                     self.blank_sensitivity_var.set(float(value))
                                 except ValueError:
                                     self.blank_sensitivity_var.set(98.0)  # Default value
+                            # Load API keys
+                            elif key == 'unsplash_api_key' and value.strip():
+                                os.environ["UNSPLASH_CLIENT_ID"] = value
+                            elif key == 'pixabay_api_key' and value.strip():
+                                os.environ["PIXABAY_API_KEY"] = value
+                            elif key == 'bing_api_key' and value.strip() and hasattr(self, 'bing_api_key_var'):
+                                self.bing_api_key_var.set(value)
+                            elif key == 'google_api_key' and value.strip():
+                                os.environ["GOOGLE_API_KEY"] = value
+                            elif key == 'google_cx' and value.strip():
+                                os.environ["GOOGLE_SEARCH_CX"] = value
+                                
+                # Display a message about loaded API keys
+                self.log_api_status()
         except Exception as e:
             print(f"Error loading settings: {e}")
             
@@ -1186,15 +1499,26 @@ class ImageCropperApp:
                 "For AI-powered removal, install: pip install torch diffusers transformers")
             return cv2.inpaint(image, mask, 7, cv2.INPAINT_TELEA)  # Fallback
 
-    def show_image_generation_options(self):
+    def show_image_generation_options(self):    
         """Show a dialog with additional image generation options"""
         options_dialog = tk.Toplevel(self.root)
-        options_dialog.title("Image Generation Options")
-        options_dialog.geometry("400x300")
+        options_dialog.title("Image Search & Generation Options")
+        options_dialog.geometry("500x550")  # Increased for more options
         options_dialog.transient(self.root)
         options_dialog.grab_set()
         
-        ttk.Label(options_dialog, text="Model Selection:").pack(anchor=tk.W, padx=10, pady=(10, 0))
+        # Create a notebook with tabs for different settings
+        notebook = ttk.Notebook(options_dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create frames for each tab
+        ai_frame = ttk.Frame(notebook, padding=10)
+        api_frame = ttk.Frame(notebook, padding=10)
+        notebook.add(ai_frame, text="AI Generation")
+        notebook.add(api_frame, text="Search APIs")
+        
+        # === AI Tab ===
+        ttk.Label(ai_frame, text="AI Model Selection:").pack(anchor=tk.W, pady=(0, 5))
         
         model_var = tk.StringVar(value="runwayml/stable-diffusion-v1-5")
         models = [
@@ -1203,42 +1527,99 @@ class ImageCropperApp:
         ]
         
         for text, value in models:
-            ttk.Radiobutton(options_dialog, text=text, value=value, variable=model_var).pack(anchor=tk.W, padx=20)
+            ttk.Radiobutton(ai_frame, text=text, value=value, variable=model_var).pack(anchor=tk.W, padx=10)
         
-        ttk.Label(options_dialog, text="Image Quality:").pack(anchor=tk.W, padx=10, pady=(10, 0))
+        ttk.Label(ai_frame, text="Image Quality:").pack(anchor=tk.W, pady=(10, 5))
         
         quality_var = tk.IntVar(value=25)
         quality_scale = ttk.Scale(
-            options_dialog, 
+            ai_frame, 
             from_=15, 
             to=50, 
             orient="horizontal", 
             variable=quality_var, 
             length=300
         )
-        quality_scale.pack(padx=10, pady=5, fill=tk.X)
-        ttk.Label(options_dialog, text="Higher = Better quality but slower").pack(anchor=tk.W, padx=10)
+        quality_scale.pack(pady=5, fill=tk.X)
+        ttk.Label(ai_frame, text="Higher = Better quality but slower").pack(anchor=tk.W)
+        
+        # === API Keys Tab ===
+        ttk.Label(api_frame, text="Configure Image Search APIs:").pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(api_frame, text="Check logs to see which API is being used").pack(anchor=tk.W, pady=(0, 10))
+        
+        # Unsplash
+        ttk.Label(api_frame, text="Unsplash Client ID:").pack(anchor=tk.W, pady=(10, 0))
+        unsplash_var = tk.StringVar(value=os.environ.get("UNSPLASH_CLIENT_ID", ""))
+        unsplash_entry = ttk.Entry(api_frame, textvariable=unsplash_var)
+        unsplash_entry.pack(pady=5, fill=tk.X)
+        ttk.Label(api_frame, text="Get it from: https://unsplash.com/developers", 
+                 font=("", 8)).pack(anchor=tk.W)
+        
+        # Pixabay
+        ttk.Label(api_frame, text="Pixabay API Key:").pack(anchor=tk.W, pady=(10, 0))
+        pixabay_var = tk.StringVar(value=os.environ.get("PIXABAY_API_KEY", ""))
+        pixabay_entry = ttk.Entry(api_frame, textvariable=pixabay_var)
+        pixabay_entry.pack(pady=5, fill=tk.X)
+        ttk.Label(api_frame, text="Get it from: https://pixabay.com/api/docs/", 
+                 font=("", 8)).pack(anchor=tk.W)
+        
+        # Bing
+        ttk.Label(api_frame, text="Bing Search API Key:").pack(anchor=tk.W, pady=(10, 0))
+        bing_var = tk.StringVar(value=self.bing_api_key_var.get() if hasattr(self, 'bing_api_key_var') else "")
+        bing_entry = ttk.Entry(api_frame, textvariable=bing_var)
+        bing_entry.pack(pady=5, fill=tk.X)
+        ttk.Label(api_frame, text="Get it from: https://portal.azure.com/#create/Microsoft.CognitiveServicesBingSearch", 
+                 font=("", 8)).pack(anchor=tk.W)
+        
+        # Google
+        ttk.Label(api_frame, text="Google Custom Search API Key:").pack(anchor=tk.W, pady=(10, 0))
+        google_key_var = tk.StringVar(value=os.environ.get("GOOGLE_API_KEY", ""))
+        google_key_entry = ttk.Entry(api_frame, textvariable=google_key_var)
+        google_key_entry.pack(pady=5, fill=tk.X)
+        
+        ttk.Label(api_frame, text="Google Custom Search Engine ID (CX):").pack(anchor=tk.W, pady=(10, 0))
+        google_cx_var = tk.StringVar(value=os.environ.get("GOOGLE_SEARCH_CX", ""))
+        google_cx_entry = ttk.Entry(api_frame, textvariable=google_cx_var)
+        google_cx_entry.pack(pady=5, fill=tk.X)
+        ttk.Label(api_frame, text="Get from: https://programmablesearchengine.google.com/", 
+                 font=("", 8)).pack(anchor=tk.W)
+        
+        # Bottom buttons
+        button_frame = ttk.Frame(options_dialog)
+        button_frame.pack(fill=tk.X, pady=10)
         
         def save_options():
             self.image_model_var = model_var.get()
             self.image_quality_var = quality_var.get()
+            
+            # Save API keys to environment variables
+            os.environ["UNSPLASH_CLIENT_ID"] = unsplash_var.get()
+            os.environ["PIXABAY_API_KEY"] = pixabay_var.get()
+            os.environ["GOOGLE_API_KEY"] = google_key_var.get()
+            os.environ["GOOGLE_SEARCH_CX"] = google_cx_var.get()
+            
+            # Update Bing API key if available
+            if hasattr(self, 'bing_api_key_var'):
+                self.bing_api_key_var.set(bing_var.get())
+            
+            # Log what's currently active
+            self.log_api_status()
+            
             options_dialog.destroy()
         
-        ttk.Button(options_dialog, text="Save Options", command=save_options).pack(pady=20)
-        
-        # Add this button to your params frame
-        # ttk.Button(param_frame, text="Advanced Image Options", command=self.show_image_generation_options).pack(anchor=tk.W, pady=10)
+        ttk.Button(button_frame, text="Save Options", command=save_options).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=options_dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
     def analyze_slide_for_image_placement(self, image):
         """Analyze a slide to find the best place to insert an AI-generated image"""
         # Convert to grayscale for text detection
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
+        height, width = image.shape[:2]
+        
         # Use OCR to find text areas
         custom_config = r'--oem 3 --psm 6'
         d = pytesseract.image_to_data(image, config=custom_config, output_type=Output.DICT)
-        
-        height, width = image.shape[:2]
         
         # Create a mask for text areas with padding
         text_mask = np.zeros((height, width), dtype=np.uint8)
@@ -1254,32 +1635,119 @@ class ImageCropperApp:
                 y_end = min(height, y + h + padding)
                 text_mask[y_start:y_end, x_start:x_end] = 255
         
+        # Add a border mask to avoid placing images too close to the edge
+        border_size = 10
+        text_mask[:border_size, :] = 255  # Top border
+        text_mask[-border_size:, :] = 255  # Bottom border
+        text_mask[:, :border_size] = 255  # Left border
+        text_mask[:, -border_size:] = 255  # Right border
+        
         # Find the largest contiguous non-text area
         empty_mask = 255 - text_mask
+        
+        # Apply morphological operations to clean up the mask
+        kernel = np.ones((5, 5), np.uint8)
+        empty_mask = cv2.morphologyEx(empty_mask, cv2.MORPH_CLOSE, kernel)
+        
         contours, _ = cv2.findContours(empty_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if not contours:
             return None, None
+        
+        # Prioritize empty areas on the right side or bottom of the slide
+        # These are common places for images in educational content
+        valid_contours = []
+        
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            area = w * h
+            min_side = min(w, h)
             
-        # Find the largest contour by area
-        largest_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour)
+            # Skip too small areas - we need at least 120x120 pixels
+            if min_side < 120:
+                continue
+                
+            # Calculate position score (prefer right side and bottom area)
+            right_bias = x / width  # Higher if more to the right
+            bottom_bias = y / height  # Higher if more to the bottom
+            size_score = min_side / max(width, height)  # Larger areas preferred
+            
+            # Combined score with weights
+            position_score = (0.4 * right_bias + 0.3 * bottom_bias + 0.3 * size_score)
+            
+            valid_contours.append({
+                'contour': contour,
+                'rect': (x, y, w, h),
+                'area': area,
+                'min_side': min_side,
+                'score': position_score
+            })
         
-        # Calculate the maximum square that fits in this rectangle
-        size = min(w, h)
-        
-        # If the space is too small, return None
-        if size < 200:  # Minimum size for a useful image
+        if not valid_contours:
             return None, None
-            
-        # Center the square in the available space
-        x_center = x + w // 2
-        y_center = y + h // 2
         
-        x_start = x_center - size // 2
-        y_start = y_center - size // 2
+        # Sort by score, highest first
+        valid_contours.sort(key=lambda x: x['score'], reverse=True)
         
-        return (x_start, y_start, size, size), (x_start, y_start, x_start + size, y_start + size)
+        # Take the highest scoring contour
+        best_match = valid_contours[0]
+        x, y, w, h = best_match['rect']
+        
+        # Adjust the image size to fit in the available space
+        # If the space is very wide, use a reasonable aspect ratio
+        if w > 1.8 * h:
+            # For very wide spaces, use a landscape format
+            new_w = min(w, int(h * 1.6))  # Max 16:10 aspect ratio
+            x = x + (w - new_w) // 2  # Center horizontally
+            w = new_w
+        elif h > 1.8 * w:
+            # For very tall spaces, use a portrait format
+            new_h = min(h, int(w * 1.6))  # Max 10:16 aspect ratio
+            y = y + (h - new_h) // 2  # Center vertically
+            h = new_h
+        
+        # Ensure we're not too close to text by reducing size slightly
+        safety_margin = 5
+        x += safety_margin
+        y += safety_margin
+        w -= safety_margin * 2
+        h -= safety_margin * 2
+        
+        # Return the rectangle and corners
+        return (x, y, w, h), (x, y, x + w, y + h)
+
+    def log_api_status(self):
+        """Log information about which API keys are available"""
+        api_status = []
+        
+        # Check Unsplash
+        if os.environ.get("UNSPLASH_CLIENT_ID", "").strip():
+            api_status.append("✓ Unsplash API")
+        
+        # Check Pixabay
+        if os.environ.get("PIXABAY_API_KEY", "").strip():
+            api_status.append("✓ Pixabay API")
+        
+        # Check Bing
+        if hasattr(self, 'bing_api_key_var') and self.bing_api_key_var.get().strip():
+            api_status.append("✓ Bing Search API")
+        
+        # Check Google
+        if (os.environ.get("GOOGLE_API_KEY", "").strip() and 
+            os.environ.get("GOOGLE_SEARCH_CX", "").strip()):
+            api_status.append("✓ Google Custom Search API")
+        
+        status_message = ""
+        if not api_status:
+            status_message = "No image search APIs configured. Using fallback methods."
+        else:
+            status_message = f"Active image services: {', '.join(api_status)}"
+        
+        # Update the UI status
+        self.status_var.set(status_message)
+        
+        # Also log to console
+        print(f"[API Status] {status_message}")
 
 if __name__ == "__main__":
     root = tk.Tk()
