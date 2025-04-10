@@ -18,19 +18,31 @@ import io
 import urllib.parse
 import random
 
-def detect_text_rows(d):
-    num_of_rows = 0
-    last_top = 0
+def detect_row_counts(d):
+    """
+    Count the number of text rows in an OCR result
+    Returns the actual number of lines of text
+    """
+    if not d['text'] or len(d['text']) == 0:
+        return 0
+        
+    # Track unique row positions
+    unique_row_positions = set()
+    
+    # Consider text items that aren't empty
     for i in range(len(d['text'])):
-        # Skip empty results
-        if d['text'][i].strip() == '':
-            continue
-        if d['top'][i] > last_top: 
-            num_of_rows += 1
-            
-        last_top = d['top'][i]
-    return last_top
-
+        if d['text'][i].strip() != '':
+            # Add the top coordinate to our set of unique positions
+            # We use a small tolerance (+-5 pixels) to account for slight vertical misalignments
+            # by rounding to nearest 10
+            row_position = (d['top'][i] // 10) * 10
+            unique_row_positions.add(row_position)
+    
+    # The number of unique positions is the number of rows
+    num_of_rows = len(unique_row_positions)
+    
+    # Return the number of rows, with a minimum of 1 if there's any text
+    return max(1, num_of_rows) if num_of_rows > 0 else 0
 
 def contains_question_indicators(text):
     """
@@ -1019,25 +1031,20 @@ class ImageCropperApp:
                     # No questions detected, proceed with splitting based on rows
                     
                     # Get the number of rows if auto-detection is enabled
-                    if 0 and use_row_detection:
+                    if use_row_detection:
                         self.status_var.set(f"Processing image {index+1}/{total} - Detecting text rows...")
-                        num_rows, row_positions = detect_text_rows(d)
+                        num_rows = detect_row_counts(d)
                         
                         # Calculate number of splits based on rows per page
                         num_splits = max(1, (num_rows + rows_per_page - 1) // rows_per_page)
                         self.status_var.set(f"Processing image {index+1}/{total} - Detected {num_rows} rows, creating {num_splits} splits")
                     else:
                         # Fallback to manual splits
-                        num_splits = 2
+                        num_splits = int(self.splits_var.get())
                         
                     # Create splits based on height
                     height, width, _ = img.shape
-                    
-                    if 0 and use_row_detection and row_positions and len(row_positions) > 1:
-                        print('no')
-                        
-                    else:
-                        min_row_height = height // num_splits
+                    min_row_height = height // num_splits
 
                     current_top = min_row_height
                     previous_top = 0
@@ -1188,6 +1195,7 @@ class ImageCropperApp:
                         
                         if generated_image is not None:
                             # Resize the generated image to fit the target space
+                            print(w,h)
                             generated_image = cv2.resize(generated_image, (w, h))
                             
                             # Create a copy of the original image
@@ -1611,7 +1619,7 @@ class ImageCropperApp:
         ttk.Button(button_frame, text="Cancel", command=options_dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
     def analyze_slide_for_image_placement(self, image):
-        """Analyze a slide to find the best place to insert an AI-generated image"""
+        """Analyze a slide to find the best place for a smaller image in empty areas"""
         # Convert to grayscale for text detection
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
@@ -1654,8 +1662,62 @@ class ImageCropperApp:
         if not contours:
             return None, None
         
-        # Prioritize empty areas on the right side or bottom of the slide
-        # These are common places for images in educational content
+        # First, check for empty corners that could hold a small image
+        corner_candidates = []
+        corner_size = min(width // 4, height // 4)  # Maximum 1/4 of slide dimension
+        min_corner_size = 120  # Minimum size for a corner image
+        
+        # Check top-right corner
+        if np.sum(text_mask[border_size:border_size+corner_size, width-corner_size-border_size:width-border_size]) == 0:
+            corner_candidates.append({
+                'rect': (width-corner_size-border_size, border_size, corner_size, corner_size),
+                'score': 1.0,  # Highest priority
+                'position': 'top-right'
+            })
+        
+        # Check bottom-right corner
+        if np.sum(text_mask[height-corner_size-border_size:height-border_size, width-corner_size-border_size:width-border_size]) == 0:
+            corner_candidates.append({
+                'rect': (width-corner_size-border_size, height-corner_size-border_size, corner_size, corner_size),
+                'score': 0.9,
+                'position': 'bottom-right'
+            })
+        
+        # Check bottom-left corner
+        if np.sum(text_mask[height-corner_size-border_size:height-border_size, border_size:border_size+corner_size]) == 0:
+            corner_candidates.append({
+                'rect': (border_size, height-corner_size-border_size, corner_size, corner_size),
+                'score': 0.8,
+                'position': 'bottom-left'
+            })
+            
+        # If any corner is suitable, prefer that
+        if corner_candidates:
+            # Sort by score
+            corner_candidates.sort(key=lambda x: x['score'], reverse=True)
+            best_corner = corner_candidates[0]
+            x, y, w, h = best_corner['rect']
+            
+            # Ensure minimum size
+            if w >= min_corner_size and h >= min_corner_size:
+                # Make it a bit smaller to avoid touching text
+                safety_margin = 10
+                x += safety_margin
+                y += safety_margin
+                w -= safety_margin * 2
+                h -= safety_margin * 2
+                
+                # Further reduce size to make it look more natural in the corner
+                w = int(w * 0.8)
+                h = int(h * 0.8)
+                
+                # Ensure dimensions are reasonable
+                w = max(min_corner_size, w)
+                h = max(min_corner_size, h)
+                
+                return (x, y, w, h), (x, y, x + w, y + h)
+        
+        # If no suitable corner found, look for other empty areas
         valid_contours = []
         
         for contour in contours:
@@ -1663,14 +1725,27 @@ class ImageCropperApp:
             area = w * h
             min_side = min(w, h)
             
-            # Skip too small areas - we need at least 120x120 pixels
-            if min_side < 120:
+            # Skip too small areas
+            if min_side < min_corner_size:
                 continue
+            
+            # Don't allow very large areas - we want a small decorative image
+            max_allowed = min(width // 3, height // 3)  # Max 1/3 of slide dimension
+            if w > max_allowed or h > max_allowed:
+                # If area is too large, create a smaller rectangle within it
+                new_w = min(w, max_allowed)
+                new_h = min(h, max_allowed)
                 
+                # Position it in the lower right of the empty area if possible
+                new_x = x + w - new_w - 10
+                new_y = y + h - new_h - 10
+                
+                x, y, w, h = new_x, new_y, new_w, new_h
+            
             # Calculate position score (prefer right side and bottom area)
             right_bias = x / width  # Higher if more to the right
             bottom_bias = y / height  # Higher if more to the bottom
-            size_score = min_side / max(width, height)  # Larger areas preferred
+            size_score = 1.0 - (w * h) / (width * height)  # Smaller areas preferred
             
             # Combined score with weights
             position_score = (0.4 * right_bias + 0.3 * bottom_bias + 0.3 * size_score)
@@ -1693,18 +1768,14 @@ class ImageCropperApp:
         best_match = valid_contours[0]
         x, y, w, h = best_match['rect']
         
-        # Adjust the image size to fit in the available space
-        # If the space is very wide, use a reasonable aspect ratio
-        if w > 1.8 * h:
-            # For very wide spaces, use a landscape format
-            new_w = min(w, int(h * 1.6))  # Max 16:10 aspect ratio
-            x = x + (w - new_w) // 2  # Center horizontally
-            w = new_w
-        elif h > 1.8 * w:
-            # For very tall spaces, use a portrait format
-            new_h = min(h, int(w * 1.6))  # Max 10:16 aspect ratio
-            y = y + (h - new_h) // 2  # Center vertically
-            h = new_h
+        # Ensure the image isn't too large - limit to 30% of slide dimensions
+        max_w = width // 3
+        max_h = height // 3
+        
+        if w > max_w:
+            w = max_w
+        if h > max_h:
+            h = max_h
         
         # Ensure we're not too close to text by reducing size slightly
         safety_margin = 5
@@ -1712,6 +1783,10 @@ class ImageCropperApp:
         y += safety_margin
         w -= safety_margin * 2
         h -= safety_margin * 2
+        
+        # Further reduce size to make images appear more proportional to the slide
+        w = int(w * 0.8)
+        h = int(h * 0.8)
         
         # Return the rectangle and corners
         return (x, y, w, h), (x, y, x + w, y + h)
