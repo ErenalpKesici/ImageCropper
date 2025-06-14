@@ -58,21 +58,16 @@ def contains_question_indicators(text):
     # If we have multiple indicators (like a, b, c or 1, 2, 3), it's likely a question
     return len(unique_indicators) >= 2
 
-def remove_empty_rows_and_columns(image, empty_threshold=100):
-    # Convert to grayscale
+def remove_empty_rows_and_columns(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # Use numpy's more efficient operations to find non-empty rows and columns
-    row_sums = np.sum(gray < empty_threshold, axis=1)
-    col_sums = np.sum(gray < empty_threshold, axis=0)
-    
+    # Hem çok açık hem çok koyu pikselleri boş kabul et
+    mask = ((gray > 30) & (gray < 220)).astype(np.uint8)
+    row_sums = np.sum(mask, axis=1)
+    col_sums = np.sum(mask, axis=0)
     non_empty_rows = np.where(row_sums > 0)[0]
     non_empty_cols = np.where(col_sums > 0)[0]
-    
-    # Crop the image to remove empty rows and columns
     if len(non_empty_rows) > 0 and len(non_empty_cols) > 0:
-        image = image[non_empty_rows[0]:non_empty_rows[-1] + 1, non_empty_cols[0]:non_empty_cols[-1] + 1]
-    
+        image = image[non_empty_rows[0]:non_empty_rows[-1]+1, non_empty_cols[0]:non_empty_cols[-1]+1]
     return image
 
 def add_outer_border(image, top_border=10, bottom_border=10, left_border=20, right_border=20):
@@ -326,7 +321,7 @@ def search_google_images(self, query, min_width=300, min_height=300):
         if not api_key or not cx:
             return None
             
-        self.status_var.set(f"Searching for images using Google: {query}")
+        self.status_var.set(f"Google kullanılarak görseller aranıyor: {query}")
         
         search_url = "https://www.googleapis.com/customsearch/v1"
 
@@ -375,19 +370,19 @@ def search_google_images(self, query, min_width=300, min_height=300):
         if img is None:
             return None
             
-        self.status_var.set("Found image via Google Custom Search")
+        self.status_var.set("Google Özel Arama ile görsel bulundu")
         return img
             
     except Exception as e:
-        print(f"Google image search error: {e}")
+        print(f"Google görsel arama hatası: {e}")
         return None
 
 class ImageCropperApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Image Cropper")
-        self.root.geometry("800x700")  # Increase default height
-        self.root.minsize(800, 700)    # Increase minimum height
+        self.root.title("Görsel Kırpıcı")
+        self.root.geometry("800x700")  # Varsayılan yükseklik artırıldı
+        self.root.minsize(800, 700)    # Minimum yükseklik artırıldı
         
         # Create default frame for all content
         self.main_content = ttk.Frame(self.root)
@@ -428,35 +423,35 @@ class ImageCropperApp:
         
         # Move ALL your existing code that creates UI elements to use scrollable_frame instead of main_frame
         # Input section
-        input_frame = ttk.LabelFrame(scrollable_frame, text="Input", padding="10")
+        input_frame = ttk.LabelFrame(scrollable_frame, text="Girdi", padding="10")
         input_frame.pack(fill=tk.X, pady=5)
         
-        self.input_files_label = ttk.Label(input_frame, text="No files selected")
+        self.input_files_label = ttk.Label(input_frame, text="Dosya seçilmedi")
         self.input_files_label.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # Button frame to hold select buttons
         select_buttons_frame = ttk.Frame(input_frame)
         select_buttons_frame.pack(side=tk.RIGHT)
         
-        select_folder_button = ttk.Button(select_buttons_frame, text="Select Folder", command=self.select_folder)
+        select_folder_button = ttk.Button(select_buttons_frame, text="Klasör Seç", command=self.select_folder)
         select_folder_button.pack(side=tk.LEFT, padx=5)
         
-        select_button = ttk.Button(select_buttons_frame, text="Select Files", command=self.select_files)
+        select_button = ttk.Button(select_buttons_frame, text="Dosya Seç", command=self.select_files)
         select_button.pack(side=tk.LEFT, padx=5)
         
         # Output section
-        output_frame = ttk.LabelFrame(scrollable_frame, text="Output", padding="10")
+        output_frame = ttk.LabelFrame(scrollable_frame, text="Çıktı", padding="10")
         output_frame.pack(fill=tk.X, pady=5)
 
         self.output_dir_label = ttk.Label(output_frame, text=self.output_dir)
         self.output_dir_label.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
-        output_button = ttk.Button(output_frame, text="Select Directory", command=self.select_output_dir)
+        output_button = ttk.Button(output_frame, text="Klasör Seç", command=self.select_output_dir)
         output_button.pack(side=tk.RIGHT, padx=5)
         
         
         # Add a save settings button
-        save_settings_button = ttk.Button(output_frame, text="Save as Default", command=self.save_settings)
+        save_settings_button = ttk.Button(output_frame, text="Varsayılanı Kaydet", command=self.save_settings)
         save_settings_button.pack(anchor=tk.W, pady=5)
         
         # Create a frame to hold operation and parameters side by side
@@ -464,24 +459,24 @@ class ImageCropperApp:
         op_param_container.pack(fill=tk.X, pady=5)
         
         # Operation section - now in left half
-        operation_frame = ttk.LabelFrame(op_param_container, text="Operation", padding="10")
+        operation_frame = ttk.LabelFrame(op_param_container, text="İşlem", padding="10")
         operation_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
         self.operation_var = tk.StringVar(value="splitter")
-        operations = [("Split Images", "splitter"), 
-             ("Crop Titles", "title_cropper"),
-             ("Remove Templates", "template_remover"),
-             ("Remove Blank Images", "blank_remover"),
-             ("Generate Missing Images", "image_generator")]
+        operations = [("Görselleri Böl", "splitter"), 
+             ("Başlıkları Kırp", "title_cropper"),
+             ("Şablonları Kaldır", "template_remover"),
+             ("Boş Görselleri Kaldır", "blank_remover"),
+             ("Eksik Görsel Oluştur", "image_generator")]
         
         for text, value in operations:
             ttk.Radiobutton(operation_frame, text=text, value=value, variable=self.operation_var).pack(anchor=tk.W)
         
         # Parameters section - now in right half
-        param_frame = ttk.LabelFrame(op_param_container, text="Parameters", padding="10")
+        param_frame = ttk.LabelFrame(op_param_container, text="Parametreler", padding="10")
         param_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
         
-        ttk.Label(param_frame, text="Rows per page:").pack(anchor=tk.W)
+        ttk.Label(param_frame, text="Sayfa başına satır:").pack(anchor=tk.W)
 
         self.rows_per_page_var = tk.StringVar(value="10")
         self.splits_var = tk.StringVar(value="2")  # Default to 2 splits as fallback
@@ -492,13 +487,13 @@ class ImageCropperApp:
         self.use_row_detection_var = tk.BooleanVar(value=True)
         use_row_detection_checkbox = ttk.Checkbutton(
             param_frame, 
-            text="Auto-detect rows (recommended)",
+            text="Satırları otomatik algıla (önerilir)",
             variable=self.use_row_detection_var
         )
         use_row_detection_checkbox.pack(anchor=tk.W, pady=(0, 10))
 
         # Add a slider for template matching threshold
-        ttk.Label(param_frame, text="Template Match Sensitivity:").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(param_frame, text="Şablon Eşleşme Hassasiyeti:").pack(anchor=tk.W, pady=(10, 0))
         self.template_sensitivity_var = tk.DoubleVar(value=0.6)
         template_sensitivity_scale = ttk.Scale(
             param_frame, 
@@ -509,18 +504,18 @@ class ImageCropperApp:
             length=150
         )
         template_sensitivity_scale.pack(anchor=tk.W, pady=(0, 5), fill=tk.X)
-        ttk.Label(param_frame, text="(Lower = More aggressive removal)").pack(anchor=tk.W)
+        ttk.Label(param_frame, text="(Düşük = Daha agresif kaldırma)").pack(anchor=tk.W)
         
         self.detect_questions_var = tk.BooleanVar(value=True)
         question_checkbox = ttk.Checkbutton(
             param_frame, 
-            text="Detect questions (don't split)",
+            text="Soruları algıla (bölme)",
             variable=self.detect_questions_var
         )
         question_checkbox.pack(anchor=tk.W, pady=(10, 0))
 
         # Parameters for blank image detection
-        ttk.Label(param_frame, text="Blank Detection Sensitivity:").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(param_frame, text="Boş Görsel Algılama Hassasiyeti:").pack(anchor=tk.W, pady=(10, 0))
         self.blank_sensitivity_var = tk.DoubleVar(value=98.0)
         blank_sensitivity_scale = ttk.Scale(
             param_frame, 
@@ -531,15 +526,15 @@ class ImageCropperApp:
             length=150
         )
         blank_sensitivity_scale.pack(anchor=tk.W, pady=(0, 5), fill=tk.X)
-        ttk.Label(param_frame, text="(Higher = More aggressive blank detection)").pack(anchor=tk.W)
+        ttk.Label(param_frame, text="(Yüksek = Daha agresif boş algılama)").pack(anchor=tk.W)
 
         # Parameters for image generation
-        ttk.Label(param_frame, text="AI Image Style:").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(param_frame, text="Yapay Zeka Görsel Stili:").pack(anchor=tk.W, pady=(10, 0))
         self.image_style_var = tk.StringVar(value="educational")
-        styles = [("Educational", "educational"), 
-                 ("Photorealistic", "photorealistic"),
-                 ("Cartoon", "cartoon"),
-                 ("Abstract", "abstract")]
+        styles = [("Eğitsel", "educational"), 
+                 ("Fotoğraf Gerçekçiliği", "photorealistic"),
+                 ("Çizgi Film", "cartoon"),
+                 ("Soyut", "abstract")]
 
         style_frame = ttk.Frame(param_frame)
         style_frame.pack(fill=tk.X, pady=5)
@@ -550,19 +545,19 @@ class ImageCropperApp:
                            variable=self.image_style_var).pack(anchor=tk.W)
 
         # Option to set API key
-        ttk.Label(param_frame, text="OpenAI API Key (optional):").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(param_frame, text="OpenAI API Anahtarı (isteğe bağlı):").pack(anchor=tk.W, pady=(10, 0))
         self.api_key_var = tk.StringVar()
         api_key_entry = ttk.Entry(param_frame, textvariable=self.api_key_var, show="*")
         api_key_entry.pack(anchor=tk.W, pady=5, fill=tk.X)
 
         # Add API key options for image search
-        ttk.Label(param_frame, text="Image Search API Keys:").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(param_frame, text="Görsel Arama API Anahtarları:").pack(anchor=tk.W, pady=(10, 0))
         
         # Bing Search API Key
         api_key_frame = ttk.Frame(param_frame)
         api_key_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(api_key_frame, text="Bing API Key:").pack(side=tk.LEFT)
+        ttk.Label(api_key_frame, text="Bing API Anahtarı:").pack(side=tk.LEFT)
         self.bing_api_key_var = tk.StringVar()
         bing_api_entry = ttk.Entry(api_key_frame, textvariable=self.bing_api_key_var, show="*", width=20)
         bing_api_entry.pack(side=tk.RIGHT, fill=tk.X, expand=True)
@@ -572,12 +567,12 @@ class ImageCropperApp:
         image_source_frame = ttk.Frame(param_frame)
         image_source_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(image_source_frame, text="Image Source:").pack(anchor=tk.W)
+        ttk.Label(image_source_frame, text="Görsel Kaynağı:").pack(anchor=tk.W)
         
         sources = [
-            ("Web Search First, then AI (recommended)", "web_first"),
-            ("AI Generation Only", "ai_only"),
-            ("Web Search Only", "web_only")
+            ("Önce Web Arama, sonra Yapay Zeka (önerilir)", "web_first"),
+            ("Sadece Yapay Zeka", "ai_only"),
+            ("Sadece Web Arama", "web_only")
         ]
         
         for text, value in sources:
@@ -585,13 +580,13 @@ class ImageCropperApp:
                           variable=self.image_source_var).pack(anchor=tk.W)
 
         # Preview area - will show thumbnails of selected images, with reduced height
-        preview_frame = ttk.LabelFrame(scrollable_frame, text="Preview", padding="10")
+        preview_frame = ttk.LabelFrame(scrollable_frame, text="Önizleme", padding="10")
         preview_frame.pack(fill=tk.BOTH, expand=True, pady=1)
 
         self.preview_frame = ttk.Frame(preview_frame)
         self.preview_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(preview_frame, height=150)  # Increased height slightly
+        self.canvas = tk.Canvas(preview_frame, height=150)  # Yükseklik biraz artırıldı
         scrollbar = ttk.Scrollbar(preview_frame, orient="horizontal", command=self.canvas.xview)
         self.canvas.configure(xscrollcommand=scrollbar.set)
 
@@ -603,7 +598,7 @@ class ImageCropperApp:
         progress_bar = ttk.Progressbar(scrollable_frame, variable=self.progress_var, maximum=100)
         progress_bar.pack(fill=tk.X, pady=5)
 
-        self.status_var = tk.StringVar(value="Ready")
+        self.status_var = tk.StringVar(value="Hazır")
         status_label = ttk.Label(scrollable_frame, textvariable=self.status_var)
         status_label.pack(anchor=tk.W, pady=5)
         
@@ -611,24 +606,24 @@ class ImageCropperApp:
         button_frame = ttk.Frame(scrollable_frame)
         button_frame.pack(fill=tk.X, pady=10)  # Added fill=tk.X
 
-        process_button = ttk.Button(button_frame, text="Process Images", command=self.process_images)
+        process_button = ttk.Button(button_frame, text="Görselleri İşle", command=self.process_images)
         process_button.pack(side=tk.LEFT, padx=5)
 
-        self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_processing, state=tk.DISABLED)
+        self.cancel_button = ttk.Button(button_frame, text="İptal", command=self.cancel_processing, state=tk.DISABLED)
         self.cancel_button.pack(side=tk.LEFT, padx=5)
 
         # Open output folder button - move to button_frame
-        open_folder_button = ttk.Button(button_frame, text="Open Output Folder", command=self.open_output_folder)
+        open_folder_button = ttk.Button(button_frame, text="Çıktı Klasörünü Aç", command=self.open_output_folder)
         open_folder_button.pack(side=tk.RIGHT, padx=5)        
         
         # Add a new section for template images that appears when "Remove Templates" is selected
-        self.templates_frame = ttk.LabelFrame(scrollable_frame, text="Watermark/Logo Templates to Remove", padding="10")
+        self.templates_frame = ttk.LabelFrame(scrollable_frame, text="Kaldırılacak Filigran/Logo Şablonları", padding="10")
 
         self.template_files = []
-        self.template_files_label = ttk.Label(self.templates_frame, text="No templates selected")
+        self.template_files_label = ttk.Label(self.templates_frame, text="Şablon seçilmedi")
         self.template_files_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        select_templates_button = ttk.Button(self.templates_frame, text="Select Watermarks/Logos", 
+        select_templates_button = ttk.Button(self.templates_frame, text="Filigran/Logo Seç", 
                                              command=self.select_templates)
         select_templates_button.pack(side=tk.RIGHT)
         
@@ -636,7 +631,7 @@ class ImageCropperApp:
         self.operation_var.trace("w", self.toggle_templates_frame)
 
         # Add this button to your params frame
-        ttk.Button(param_frame, text="Advanced Image Options", command=self.show_image_generation_options).pack(anchor=tk.W, pady=10)
+        ttk.Button(param_frame, text="Gelişmiş Görsel Ayarları", command=self.show_image_generation_options).pack(anchor=tk.W, pady=10)
         
         # Add a fixed-position frame at the bottom for action buttons that always stay visible
         button_container = ttk.Frame(self.root)
@@ -646,23 +641,23 @@ class ImageCropperApp:
         button_frame = ttk.Frame(button_container)
         button_frame.pack(fill=tk.X)
         
-        process_button = ttk.Button(button_frame, text="Process Images", command=self.process_images)
+        process_button = ttk.Button(button_frame, text="Görselleri İşle", command=self.process_images)
         process_button.pack(side=tk.LEFT, padx=5)
         
-        self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self.cancel_processing, state=tk.DISABLED)
+        self.cancel_button = ttk.Button(button_frame, text="İptal", command=self.cancel_processing, state=tk.DISABLED)
         self.cancel_button.pack(side=tk.LEFT, padx=5)
         
         # Open output folder button - move to button_frame
-        open_folder_button = ttk.Button(button_frame, text="Open Output Folder", command=self.open_output_folder)
+        open_folder_button = ttk.Button(button_frame, text="Çıktı Klasörünü Aç", command=self.open_output_folder)
         open_folder_button.pack(side=tk.RIGHT, padx=5)
 
     def select_files(self):
-        filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff")]
+        filetypes = [("Görsel dosyalar", "*.png *.jpg *.jpeg *.bmp *.tiff")]
         files = filedialog.askopenfilenames(filetypes=filetypes)
         
         if files:
             self.input_files = list(files)
-            self.input_files_label.config(text=f"{len(self.input_files)} files selected")
+            self.input_files_label.config(text=f"{len(self.input_files)} dosya seçildi")
             self.update_preview()
         
     def select_output_dir(self):
@@ -705,7 +700,7 @@ class ImageCropperApp:
     def generate_image_for_text(self, text, size=(512, 512)):
         """Generate an image based on text content, prioritizing web search before AI generation"""
         try:
-            self.status_var.set("Searching for images on the web...")
+            self.status_var.set("Web'de görseller aranıyor...")
             
             # Clean the text for better search results
             clean_text = re.sub(r'[^\w\s]', '', text)
@@ -715,11 +710,11 @@ class ImageCropperApp:
             web_image = self.search_web_image(clean_text)
             
             if web_image is not None:
-                self.status_var.set("Found image from web search!")
+                self.status_var.set("Web aramasından görsel bulundu!")
                 return web_image
                 
             # If web search fails, fall back to AI generation
-            self.status_var.set("No suitable images found online. Falling back to AI generation...")
+            self.status_var.set("Çevrimiçi uygun görsel bulunamadı. Yapay Zeka ile oluşturuluyor...")
             
             # Set custom HF_HOME path before importing huggingface libraries
             import os
@@ -736,15 +731,15 @@ class ImageCropperApp:
             
             # Create style-specific prompt
             if style == "educational":
-                prompt_prefix = "Simple, clean educational graphic illustration about"
+                prompt_prefix = "Basit, temiz eğitici grafik illüstrasyonu hakkında"
             elif style == "photorealistic":
-                prompt_prefix = "Photorealistic image showing"
+                prompt_prefix = "Fotoğraf gerçekçiliğinde görüntü gösteren"
             elif style == "cartoon":
-                prompt_prefix = "Colorful cartoon illustration depicting"
+                prompt_prefix = "Renkli çizgi film illüstrasyonu tasvir eden"
             elif style == "abstract":
-                prompt_prefix = "Abstract conceptual artwork representing"
+                prompt_prefix = "Soyut kavramsal sanat eseri temsil eden"
             else:
-                prompt_prefix = "Simple illustration about"
+                prompt_prefix = "Basit illüstrasyon hakkında"
                 
             # Clean up the text for better prompts - remove special characters and limit length
             clean_text = re.sub(r'[^\w\s]', '', text)
@@ -760,16 +755,16 @@ class ImageCropperApp:
             if torch.cuda.is_available():
                 device = "cuda"
                 dtype = torch.float16
-                self.status_var.set("Using NVIDIA GPU for image generation")
+                self.status_var.set("NVIDIA GPU kullanılarak görsel oluşturuluyor")
             else:
                 # Try to check if Intel's OneAPI is available
                 try:
                     import intel_extension_for_pytorch as ipex
                     device = "xpu" if hasattr(torch, 'xpu') and torch.xpu.is_available() else "cpu"
                     if device == "xpu":
-                        self.status_var.set("Using Intel GPU acceleration")
+                        self.status_var.set("Intel GPU hızlandırma kullanılıyor")
                 except ImportError:
-                    self.status_var.set("Using CPU for image generation (slower)")
+                    self.status_var.set("CPU kullanılarak görsel oluşturuluyor (daha yavaş)")
             
             # Use a smaller, faster model for generation
             model_id = "runwayml/stable-diffusion-v1-5"  # More compatible model
@@ -791,7 +786,7 @@ class ImageCropperApp:
                 pipe = pipe.to(device)
             
             # Generate the image
-            self.status_var.set("Generating image... (this may take 15-30 seconds)")
+            self.status_var.set("Görsel oluşturuluyor... (15-30 saniye sürebilir)")
             with torch.no_grad():
                 image = pipe(
                     prompt, 
@@ -814,17 +809,17 @@ class ImageCropperApp:
             return image_cv2
             
         except ImportError as e:
-            messagebox.showwarning("Libraries Missing", 
-                f"Missing required libraries: {e}\n\nPlease install with:\npip install torch diffusers transformers accelerate")
+            messagebox.showwarning("Eksik Kütüphaneler", 
+                f"Gerekli kütüphaneler eksik: {e}\n\nLütfen şu komutla yükleyin:\npip install torch diffusers transformers accelerate")
             return None
         except Exception as e:
-            messagebox.showerror("Image Generation Error", f"Error generating image: {str(e)}")
+            messagebox.showerror("Görsel Oluşturma Hatası", f"Görsel oluşturulurken hata oluştu: {str(e)}")
             return None
 
     def search_web_image(self, query, min_width=300, min_height=300):
         """Search for images on the web using available APIs"""
         try:
-            self.status_var.set(f"Searching for images related to: {query}")
+            self.status_var.set(f"İlgili görseller aranıyor: {query}")
             
             # Try different search engines based on what's configured
             if hasattr(self, 'bing_api_key_var') and self.bing_api_key_var.get():
@@ -841,7 +836,7 @@ class ImageCropperApp:
             # Fallback to a simple web scraper approach if no API keys worked
             return self.search_web_images_simple(query, min_width, min_height)
         except Exception as e:
-            print(f"Error in web image search: {e}")
+            print(f"Web görsel arama hatası: {e}")
             return None
 
     def search_bing_images(self, query, min_width=300, min_height=300):
@@ -891,7 +886,7 @@ class ImageCropperApp:
             return img
             
         except Exception as e:
-            print(f"Bing image search error: {e}")
+            print(f"Bing görsel arama hatası: {e}")
             return None
 
     def search_web_images_simple(self, query, min_width=300, min_height=300):
@@ -915,7 +910,7 @@ class ImageCropperApp:
                     response = requests.get(url)
                 else:
                     # Last resort - try to use a search engine but this might not work reliably
-                    self.status_var.set("No image API keys found. Set UNSPLASH_CLIENT_ID or PIXABAY_API_KEY in environment variables for better results.")
+                    self.status_var.set("Hiçbir görsel API anahtarı bulunamadı. Daha iyi sonuçlar için UNSPLASH_CLIENT_ID veya PIXABAY_API_KEY ortam değişkenlerini ayarlayın.")
                     return None
                     
             response.raise_for_status()
@@ -956,7 +951,7 @@ class ImageCropperApp:
             return img
             
         except Exception as e:
-            print(f"Simple web image search error: {e}")
+            print(f"Basit web görsel arama hatası: {e}")
             return None
 
     def process_single_image(self, image_path, operation, params, index, total):
@@ -968,7 +963,7 @@ class ImageCropperApp:
             # Modified process_image function to use selected output directory
             img = cv2.imread(image_path)
             if img is None:
-                print(f"Could not read image: {image_path}")
+                print(f"Görsel okunamadı: {image_path}")
                 return
                 
             image_name = os.path.basename(image_path)
@@ -995,92 +990,76 @@ class ImageCropperApp:
                 if self.last_title != '' and current_title == self.last_title:
                     height_to_crop = d['top'][line_count_to_crop] - 10
                     crop_img = img[height_to_crop:, :]
+                    crop_img = remove_empty_rows_and_columns(crop_img)
                     img = cv2.resize(crop_img, (1920, 1080))
-                
-                self.last_title = current_title
-                self.last_top = current_top
+                else:
+                    img = remove_empty_rows_and_columns(img)
                 
                 cv2.imwrite(os.path.join(self.output_dir, image_name), img)
             
             elif operation == 'splitter':
-                detect_questions = params[1]  # Get the question detection flag
-                rows_per_page = params[2]     # Get rows per page
-                use_row_detection = params[3] # Whether to use auto row detection
-                
-                # Only check for questions if the feature is enabled
+                detect_questions = params[1]
+                rows_per_page = params[2]
+                use_row_detection = params[3]
                 if detect_questions:
                     ocr_text = pytesseract.image_to_string(img, config=custom_config)
                     has_questions = contains_question_indicators(ocr_text)
                 else:
                     has_questions = False
-                
                 if has_questions:
-                    # This image likely contains questions, so just resize without splitting
-                    self.status_var.set(f"Processing image {index+1}/{total} - Contains questions, not splitting")
-                    
-                    # Clean up the image
+                    self.status_var.set(f"Görsel işleniyor {index+1}/{total} - Sorular içeriyor, bölünmüyor")
                     cleaned_img = remove_empty_rows_and_columns(img)
-                    cleaned_img = add_outer_border(cleaned_img, top_border=50, bottom_border=50, left_border=10, right_border=10)
-                    
-                    # Resize to desired dimensions
+                    cleaned_img = add_outer_border(cleaned_img, top_border=100, bottom_border=100, left_border=40, right_border=40)
                     cleaned_img = cv2.resize(cleaned_img, (1920, 1080))
-                    
                     output_path = os.path.join(self.output_dir, image_name)
                     cv2.imwrite(output_path, cleaned_img)
                 else:
-                    # No questions detected, proceed with splitting based on rows
-                    
-                    # Get the number of rows if auto-detection is enabled
-                    if use_row_detection:
-                        self.status_var.set(f"Processing image {index+1}/{total} - Detecting text rows...")
-                        num_rows = detect_row_counts(d)
-                        
-                        # Calculate number of splits based on rows per page
-                        num_splits = max(1, (num_rows + rows_per_page - 1) // rows_per_page)
-                        self.status_var.set(f"Processing image {index+1}/{total} - Detected {num_rows} rows, creating {num_splits} splits")
-                    else:
-                        # Fallback to manual splits
-                        num_splits = int(self.splits_var.get())
-                        
-                    # Create splits based on height
-                    height, width, _ = img.shape
-                    min_row_height = height // num_splits
-
-                    current_top = min_row_height
-                    previous_top = 0
-                    i = 0
-                    while i < num_splits:
-                        for j in range(len(d['top'])):
-                            if d['top'][j] > current_top:
-                                break
-                            if d['text'][j] == '':
-                                continue
-                            if d['top'][j] + d['height'][j] > current_top:
-                                current_top = d['top'][j] + d['height'][j]
-                        
-                        crop_img = img[previous_top:current_top, :]
+                    # --- Satırların üst ve alt sınırlarını bul ---
+                    line_tops = []
+                    line_bottoms = []
+                    for i in range(len(d['text'])):
+                        if d['text'][i].strip() != '':
+                            top = d['top'][i]
+                            height = d['height'][i]
+                            bottom = top + height
+                            line_tops.append(top)
+                            line_bottoms.append(bottom)
+                    if not line_tops:
+                        # Hiç satır yoksa tüm resmi tek parça olarak işle
+                        crop_img = remove_empty_rows_and_columns(img)
+                        crop_img = add_outer_border(crop_img, top_border=100, bottom_border=100, left_border=40, right_border=40)
+                        crop_img = cv2.resize(crop_img, (1920, 1080))
+                        output_path = os.path.join(self.output_dir, f"{image_name}_0.png")
+                        cv2.imwrite(output_path, crop_img)
+                        return
+                    # Satırları gruplara ayır
+                    num_lines = len(line_tops)
+                    splits = []
+                    for i in range(0, num_lines, rows_per_page):
+                        group_tops = line_tops[i:i+rows_per_page]
+                        group_bottoms = line_bottoms[i:i+rows_per_page]
+                        start = max(0, min(group_tops))
+                        end = max(group_bottoms)
+                        splits.append((start, end))
+                    for i, (start, end) in enumerate(splits):
+                        crop_img = img[start:end, :]
                         crop_img = remove_empty_rows_and_columns(crop_img)
-                        
+                        crop_img = add_outer_border(crop_img, top_border=100, bottom_border=100, left_border=40, right_border=40)
                         if not is_image_blank(crop_img):
-                            crop_img = add_outer_border(crop_img, top_border=50, bottom_border=50, left_border=10, right_border=10)
                             crop_img = cv2.resize(crop_img, (1920, 1080))
                             output_path = os.path.join(self.output_dir, f"{image_name}_{i}.png")
                             cv2.imwrite(output_path, crop_img)
-                        
-                        previous_top = current_top
-                        current_top += min_row_height
-                        i += 1
 
             elif operation == 'template_remover':
                 # New operation to remove templates from images
                 result_img = img.copy()
                 
                 if not self.template_files:
-                    messagebox.showwarning("No Templates", "Please select template images first.")
+                    messagebox.showwarning("Şablon Yok", "Lütfen önce şablon görselleri seçin.")
                     return
                 
                 # Add status updates
-                self.status_var.set(f"Processing image {index+1}/{total} - Removing templates...")
+                self.status_var.set(f"Görsel işleniyor {index+1}/{total} - Şablonlar kaldırılıyor...")
                 
                 # Try with different scales in case the template size varies
                 scales = [1.0, 0.75, 1.25]
@@ -1113,7 +1092,7 @@ class ImageCropperApp:
                                 result_img = remove_template_from_image(result_img, template, threshold=0.7, max_matches=5)
                                 
                     except Exception as e:
-                        print(f"Error applying template {template_path}: {e}")
+                        print(f"Şablon uygulanırken hata oluştu {template_path}: {e}")
                 
                 # Save the result using PIL to handle Unicode paths
                 output_path = os.path.join(self.output_dir, f"cleaned_{image_name}")
@@ -1122,7 +1101,7 @@ class ImageCropperApp:
             
             elif operation == 'blank_remover':
                 # Operation to identify and remove blank images
-                self.status_var.set(f"Processing image {index+1}/{total} - Checking if blank...")
+                self.status_var.set(f"Görsel işleniyor {index+1}/{total} - Boş olup olmadığı kontrol ediliyor...")
                 
                 # Get blank detection sensitivity from slider
                 blank_threshold = self.blank_sensitivity_var.get()
@@ -1139,7 +1118,7 @@ class ImageCropperApp:
                     output_path = os.path.join(blank_dir, image_name)
                     pil_img.save(output_path)
                     
-                    self.status_var.set(f"Image {image_name} identified as blank")
+                    self.status_var.set(f"Görsel {image_name} boş olarak tanımlandı")
                 else:
                     # If not blank, save to output directory
                     pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -1148,7 +1127,7 @@ class ImageCropperApp:
 
             elif operation == 'image_generator':
                 # Operation to generate and insert images where appropriate
-                self.status_var.set(f"Processing image {index+1}/{total} - Analyzing for image placement...")
+                self.status_var.set(f"Görsel işleniyor {index+1}/{total} - Görsel yerleştirme için analiz ediliyor...")
                 
                 try:
                     # Extract text from the slide
@@ -1156,7 +1135,7 @@ class ImageCropperApp:
                     
                     # Skip if the text is very short (likely not enough content to generate from)
                     if len(ocr_text.strip()) < 20:
-                        self.status_var.set(f"Image {index+1}/{total} - Not enough text for generation")
+                        self.status_var.set(f"Görsel {index+1}/{total} - Görsel oluşturmak için yeterli metin yok")
                         # Just save the original image
                         output_path = os.path.join(self.output_dir, image_name)
                         cv2.imwrite(output_path, img)
@@ -1173,7 +1152,7 @@ class ImageCropperApp:
                         x, y, w, h = ensure_dimensions_divisible_by_8((x, y, w, h))
                         
                         # Show message about space found
-                        self.status_var.set(f"Image {index+1}/{total} - Found space ({w}x{h}) for image")
+                        self.status_var.set(f"Görsel {index+1}/{total} - Görsel için alan bulundu ({w}x{h})")
                         self.root.update()  # Force UI update
                         
                         # Check image source preference
@@ -1190,7 +1169,7 @@ class ImageCropperApp:
                             # Try web search first, then fall back to AI
                             generated_image = self.search_web_image(ocr_text, min_width=w//2, min_height=h//2)
                             if generated_image is None:
-                                self.status_var.set("No suitable web images found, using AI generation...")
+                                self.status_var.set("Uygun web görselleri bulunamadı, Yapay Zeka kullanılıyor...")
                                 generated_image = self.generate_image_for_text(ocr_text, size=(w, h))
                         
                         if generated_image is not None:
@@ -1208,33 +1187,33 @@ class ImageCropperApp:
                             output_path = os.path.join(self.output_dir, f"enhanced_{image_name}")
                             cv2.imwrite(output_path, result_img)
                             
-                            self.status_var.set(f"Added image to {image_name}")
+                            self.status_var.set(f"{image_name} görseline görsel eklendi")
                         else:
                             # Failed to find or generate image, save original
                             output_path = os.path.join(self.output_dir, image_name)
                             cv2.imwrite(output_path, img)
-                            self.status_var.set(f"Could not find or generate a suitable image")
+                            self.status_var.set(f"Uygun bir görsel bulunamadı veya oluşturulamadı")
                     else:
                         # No suitable space for an image
-                        self.status_var.set(f"Image {index+1}/{total} - No suitable space found for image")
+                        self.status_var.set(f"Görsel {index+1}/{total} - Görsel için uygun alan bulunamadı")
                         output_path = os.path.join(self.output_dir, image_name)
                         cv2.imwrite(output_path, img)
                 except Exception as e:
-                    print(f"Error in image generation: {e}")
+                    print(f"Görsel oluşturma hatası: {e}")
                     output_path = os.path.join(self.output_dir, image_name)
                     cv2.imwrite(output_path, img)
 
             # Update progress
             progress = (index + 1) / total * 100
             self.progress_var.set(progress)
-            self.status_var.set(f"Processed {index + 1} of {total} images")
+            self.status_var.set(f"{total} görselin {index + 1} tanesi işlendi")
             
         except Exception as e:
-            print(f"Error processing image {image_path}: {e}")
+            print(f"Görsel işlenirken hata oluştu {image_path}: {e}")
     
     def process_images_thread(self):
         if not self.input_files:
-            messagebox.showwarning("No Input", "Please select input files first.")
+            messagebox.showwarning("Girdi Yok", "Lütfen önce giriş dosyalarını seçin.")
             return
             
         operation = self.operation_var.get()
@@ -1265,7 +1244,7 @@ class ImageCropperApp:
         
         # Reset progress
         self.progress_var.set(0)
-        self.status_var.set("Processing...")
+        self.status_var.set("İşleniyor...")
         
         # Add these variables before the ThreadPoolExecutor block
         blank_count = 0
@@ -1296,11 +1275,11 @@ class ImageCropperApp:
             if os.path.exists(blank_dir):
                 blank_count = len(os.listdir(blank_dir))
                 
-            self.status_var.set(f"Processing complete! Found {blank_count} blank images out of {total_count}")
-            messagebox.showinfo("Complete", f"Image processing completed!\n\n{blank_count} blank images moved to 'blank_images' folder.\n{total_count - blank_count} non-blank images kept in output folder.")
+            self.status_var.set(f"İşleme tamamlandı! {total_count} görselin {blank_count} tanesi boş olarak bulundu")
+            messagebox.showinfo("Tamamlandı", f"Görsel işleme tamamlandı!\n\n{blank_count} boş görsel 'blank_images' klasörüne taşındı.\n{total_count - blank_count} boş olmayan görsel çıktı klasöründe tutuldu.")
         else:
-            self.status_var.set("Processing complete!")
-            messagebox.showinfo("Complete", "Image processing completed successfully!")
+            self.status_var.set("İşleme tamamlandı!")
+            messagebox.showinfo("Tamamlandı", "Görsel işleme başarıyla tamamlandı!")
     
     def process_images(self):
         self.processing_cancelled = False
@@ -1311,14 +1290,14 @@ class ImageCropperApp:
     
     def cancel_processing(self):
         self.processing_cancelled = True
-        self.status_var.set("Cancelling...")
+        self.status_var.set("İptal ediliyor...")
 
     def open_output_folder(self):
         if os.path.exists(self.output_dir):
             # Open the folder in file explorer (works on Windows)
             os.startfile(self.output_dir)
         else:
-            messagebox.showwarning("Folder Not Found", "Output folder does not exist yet.")
+            messagebox.showwarning("Klasör Bulunamadı", "Çıktı klasörü henüz mevcut değil.")
     
     def save_settings(self):
         """Save current settings as default"""
@@ -1349,9 +1328,9 @@ class ImageCropperApp:
                 for key, value in settings.items():
                     f.write(f"{key}={value}\n")
                     
-            messagebox.showinfo("Settings Saved", "Default settings and API keys have been saved.")
+            messagebox.showinfo("Ayarlar Kaydedildi", "Varsayılan ayarlar ve API anahtarları kaydedildi.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save settings: {e}")
+            messagebox.showerror("Hata", f"Ayarlar kaydedilemedi: {e}")
     
     def load_settings(self):
         """Load saved settings"""
@@ -1392,7 +1371,7 @@ class ImageCropperApp:
                 # Display a message about loaded API keys
                 self.log_api_status()
         except Exception as e:
-            print(f"Error loading settings: {e}")
+            print(f"Ayarlar yüklenirken hata oluştu: {e}")
             
     def select_folder(self):
         """Select a folder and add all images from it"""
@@ -1407,10 +1386,10 @@ class ImageCropperApp:
                     
             if image_files:
                 self.input_files = image_files
-                self.input_files_label.config(text=f"{len(self.input_files)} files selected from folder")
+                self.input_files_label.config(text=f"{len(self.input_files)} dosya klasörden seçildi")
                 self.update_preview()
             else:
-                messagebox.showwarning("No Images", "No image files found in the selected folder.")
+                messagebox.showwarning("Görsel Yok", "Seçilen klasörde görsel dosyası bulunamadı.")
     
     def toggle_templates_frame(self, *args):
         """Show or hide the templates frame based on the selected operation"""
@@ -1420,26 +1399,26 @@ class ImageCropperApp:
             
             # Show a message box to guide the user if no templates are selected yet
             # if not self.template_files:
-            #     messagebox.showinfo("Template Selection", 
-            #                        "Please select watermark/logo images to remove using the 'Select Templates' button.")
+            #     messagebox.showinfo("Şablon Seçimi", 
+            #                        "Lütfen 'Şablon Seç' düğmesini kullanarak kaldırılacak filigran/logo görsellerini seçin.")
         else:
             self.templates_frame.pack_forget()
 
     def select_templates(self):
         """Select template images (logos or watermarks to remove)"""
-        filetypes = [("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff")]
+        filetypes = [("Görsel dosyalar", "*.png *.jpg *.jpeg *.bmp *.tiff")]
         files = filedialog.askopenfilenames(filetypes=filetypes)
         
         if files:
             self.template_files = list(files)
-            self.template_files_label.config(text=f"{len(self.template_files)} templates selected")
+            self.template_files_label.config(text=f"{len(self.template_files)} şablon seçildi")
             self.update_template_preview()
             
             # Show message to explain the process
             messagebox.showinfo(
-                "Templates Selected", 
-                "Selected templates will be removed from all input images.\n\n" +
-                "Processing may take several minutes depending on the number and size of images."
+                "Şablonlar Seçildi", 
+                "Seçilen şablonlar tüm giriş görsellerinden kaldırılacaktır.\n\n" +
+                "İşleme, görsel sayısına ve boyutlarına bağlı olarak birkaç dakika sürebilir."
             )
             
     def update_template_preview(self):
@@ -1470,7 +1449,7 @@ class ImageCropperApp:
                 label = ttk.Label(frame, image=photo)
                 label.pack()
             except Exception as e:
-                print(f"Error creating template thumbnail: {e}")
+                print(f"Şablon küçük resim oluşturulurken hata oluştu: {e}")
 
     def use_ai_inpainting(self, image, mask):
         """Use an AI model to inpaint masked regions more naturally"""
@@ -1480,7 +1459,7 @@ class ImageCropperApp:
             import torch
             
             # Load model - first time will download the model
-            self.status_var.set("Loading AI model (first use may take a while)...")
+            self.status_var.set("Yapay Zeka modeli yükleniyor (ilk kullanım biraz zaman alabilir)...")
             pipe = AutoPipelineForInpainting.from_pretrained(
                 "runwayml/stable-diffusion-inpainting", 
                 torch_dtype=torch.float16,
@@ -1493,7 +1472,7 @@ class ImageCropperApp:
             
             # Run inpainting
             result = pipe(
-                prompt="clean image without watermark",
+                prompt="filigran olmadan temiz görsel",
                 image=pil_image,
                 mask_image=pil_mask,
                 num_inference_steps=20
@@ -1503,14 +1482,14 @@ class ImageCropperApp:
             return cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
         
         except ImportError:
-            messagebox.showwarning("Libraries Missing", 
-                "For AI-powered removal, install: pip install torch diffusers transformers")
+            messagebox.showwarning("Eksik Kütüphaneler", 
+                "Yapay Zeka destekli kaldırma için şu komutu kullanarak yükleyin: pip install torch diffusers transformers")
             return cv2.inpaint(image, mask, 7, cv2.INPAINT_TELEA)  # Fallback
 
     def show_image_generation_options(self):    
         """Show a dialog with additional image generation options"""
         options_dialog = tk.Toplevel(self.root)
-        options_dialog.title("Image Search & Generation Options")
+        options_dialog.title("Görsel Arama ve Oluşturma Ayarları")
         options_dialog.geometry("500x550")  # Increased for more options
         options_dialog.transient(self.root)
         options_dialog.grab_set()
@@ -1522,22 +1501,22 @@ class ImageCropperApp:
         # Create frames for each tab
         ai_frame = ttk.Frame(notebook, padding=10)
         api_frame = ttk.Frame(notebook, padding=10)
-        notebook.add(ai_frame, text="AI Generation")
-        notebook.add(api_frame, text="Search APIs")
+        notebook.add(ai_frame, text="Yapay Zeka Oluşturma")
+        notebook.add(api_frame, text="Arama API'leri")
         
         # === AI Tab ===
-        ttk.Label(ai_frame, text="AI Model Selection:").pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(ai_frame, text="Yapay Zeka Modeli Seçimi:").pack(anchor=tk.W, pady=(0, 5))
         
         model_var = tk.StringVar(value="runwayml/stable-diffusion-v1-5")
         models = [
-            ("Stable Diffusion 1.5 (Faster)", "runwayml/stable-diffusion-v1-5"),
-            ("Stable Diffusion 2.1 (Better Quality)", "stabilityai/stable-diffusion-2-1")
+            ("Stable Diffusion 1.5 (Daha Hızlı)", "runwayml/stable-diffusion-v1-5"),
+            ("Stable Diffusion 2.1 (Daha İyi Kalite)", "stabilityai/stable-diffusion-2-1")
         ]
         
         for text, value in models:
             ttk.Radiobutton(ai_frame, text=text, value=value, variable=model_var).pack(anchor=tk.W, padx=10)
         
-        ttk.Label(ai_frame, text="Image Quality:").pack(anchor=tk.W, pady=(10, 5))
+        ttk.Label(ai_frame, text="Görsel Kalitesi:").pack(anchor=tk.W, pady=(10, 5))
         
         quality_var = tk.IntVar(value=25)
         quality_scale = ttk.Scale(
@@ -1549,47 +1528,47 @@ class ImageCropperApp:
             length=300
         )
         quality_scale.pack(pady=5, fill=tk.X)
-        ttk.Label(ai_frame, text="Higher = Better quality but slower").pack(anchor=tk.W)
+        ttk.Label(ai_frame, text="Yüksek = Daha iyi kalite ancak daha yavaş").pack(anchor=tk.W)
         
         # === API Keys Tab ===
-        ttk.Label(api_frame, text="Configure Image Search APIs:").pack(anchor=tk.W, pady=(0, 10))
-        ttk.Label(api_frame, text="Check logs to see which API is being used").pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(api_frame, text="Görsel Arama API'lerini Yapılandırın:").pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(api_frame, text="Hangi API'nin kullanıldığını görmek için günlükleri kontrol edin").pack(anchor=tk.W, pady=(0, 10))
         
         # Unsplash
         ttk.Label(api_frame, text="Unsplash Client ID:").pack(anchor=tk.W, pady=(10, 0))
         unsplash_var = tk.StringVar(value=os.environ.get("UNSPLASH_CLIENT_ID", ""))
         unsplash_entry = ttk.Entry(api_frame, textvariable=unsplash_var)
         unsplash_entry.pack(pady=5, fill=tk.X)
-        ttk.Label(api_frame, text="Get it from: https://unsplash.com/developers", 
+        ttk.Label(api_frame, text="Buradan alın: https://unsplash.com/developers", 
                  font=("", 8)).pack(anchor=tk.W)
         
         # Pixabay
-        ttk.Label(api_frame, text="Pixabay API Key:").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(api_frame, text="Pixabay API Anahtarı:").pack(anchor=tk.W, pady=(10, 0))
         pixabay_var = tk.StringVar(value=os.environ.get("PIXABAY_API_KEY", ""))
         pixabay_entry = ttk.Entry(api_frame, textvariable=pixabay_var)
         pixabay_entry.pack(pady=5, fill=tk.X)
-        ttk.Label(api_frame, text="Get it from: https://pixabay.com/api/docs/", 
+        ttk.Label(api_frame, text="Buradan alın: https://pixabay.com/api/docs/", 
                  font=("", 8)).pack(anchor=tk.W)
         
         # Bing
-        ttk.Label(api_frame, text="Bing Search API Key:").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(api_frame, text="Bing Arama API Anahtarı:").pack(anchor=tk.W, pady=(10, 0))
         bing_var = tk.StringVar(value=self.bing_api_key_var.get() if hasattr(self, 'bing_api_key_var') else "")
         bing_entry = ttk.Entry(api_frame, textvariable=bing_var)
         bing_entry.pack(pady=5, fill=tk.X)
-        ttk.Label(api_frame, text="Get it from: https://portal.azure.com/#create/Microsoft.CognitiveServicesBingSearch", 
+        ttk.Label(api_frame, text="Buradan alın: https://portal.azure.com/#create/Microsoft.CognitiveServicesBingSearch", 
                  font=("", 8)).pack(anchor=tk.W)
         
         # Google
-        ttk.Label(api_frame, text="Google Custom Search API Key:").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(api_frame, text="Google Özel Arama API Anahtarı:").pack(anchor=tk.W, pady=(10, 0))
         google_key_var = tk.StringVar(value=os.environ.get("GOOGLE_API_KEY", ""))
         google_key_entry = ttk.Entry(api_frame, textvariable=google_key_var)
         google_key_entry.pack(pady=5, fill=tk.X)
         
-        ttk.Label(api_frame, text="Google Custom Search Engine ID (CX):").pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(api_frame, text="Google Özel Arama Motoru ID (CX):").pack(anchor=tk.W, pady=(10, 0))
         google_cx_var = tk.StringVar(value=os.environ.get("GOOGLE_SEARCH_CX", ""))
         google_cx_entry = ttk.Entry(api_frame, textvariable=google_cx_var)
         google_cx_entry.pack(pady=5, fill=tk.X)
-        ttk.Label(api_frame, text="Get from: https://programmablesearchengine.google.com/", 
+        ttk.Label(api_frame, text="Buradan alın: https://programmablesearchengine.google.com/", 
                  font=("", 8)).pack(anchor=tk.W)
         
         # Bottom buttons
@@ -1615,8 +1594,8 @@ class ImageCropperApp:
             
             options_dialog.destroy()
         
-        ttk.Button(button_frame, text="Save Options", command=save_options).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(button_frame, text="Cancel", command=options_dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Ayarları Kaydet", command=save_options).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="İptal", command=options_dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
     def analyze_slide_for_image_placement(self, image):
         """Analyze a slide to find the best place for a smaller image in empty areas"""
@@ -1805,24 +1784,24 @@ class ImageCropperApp:
         
         # Check Bing
         if hasattr(self, 'bing_api_key_var') and self.bing_api_key_var.get().strip():
-            api_status.append("✓ Bing Search API")
+            api_status.append("✓ Bing Arama API")
         
         # Check Google
         if (os.environ.get("GOOGLE_API_KEY", "").strip() and 
             os.environ.get("GOOGLE_SEARCH_CX", "").strip()):
-            api_status.append("✓ Google Custom Search API")
+            api_status.append("✓ Google Özel Arama API")
         
         status_message = ""
         if not api_status:
-            status_message = "No image search APIs configured. Using fallback methods."
+            status_message = "Hiçbir görsel arama API'si yapılandırılmadı. Yedek yöntemler kullanılıyor."
         else:
-            status_message = f"Active image services: {', '.join(api_status)}"
+            status_message = f"Aktif görsel hizmetleri: {', '.join(api_status)}"
         
         # Update the UI status
         self.status_var.set(status_message)
         
         # Also log to console
-        print(f"[API Status] {status_message}")
+        print(f"[API Durumu] {status_message}")
 
 if __name__ == "__main__":
     root = tk.Tk()

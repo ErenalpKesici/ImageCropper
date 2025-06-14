@@ -87,6 +87,94 @@ def is_image_blank(image, background_threshold=99.0, min_contour_area=500, std_d
     
     return False
 
+def crop_text_area(img, margin=40, page_size=(1920, 1080)):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Adaptif threshold ile yazı bölgelerini öne çıkar
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                   cv2.THRESH_BINARY_INV, 25, 15)
+    # Konturları bul
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return img  # Hiç yazı yoksa orijinali döndür
+    # Tüm konturları kapsayan dikdörtgeni bul
+    x, y, w, h = cv2.boundingRect(np.vstack(contours))
+    # Kenar boşluğu ekle
+    x = max(0, x - margin)
+    y = max(0, y - margin)
+    w = min(img.shape[1] - x, w + 2 * margin)
+    h = min(img.shape[0] - y, h + 2 * margin)
+    crop = img[y:y+h, x:x+w]
+    # Yeni beyaz sayfa oluştur ve ortala
+    page = np.full((page_size[1], page_size[0], 3), 255, dtype=np.uint8)
+    ch, cw = crop.shape[:2]
+    y_offset = (page_size[1] - ch) // 2
+    x_offset = (page_size[0] - cw) // 2
+    page[y_offset:y_offset+ch, x_offset:x_offset+cw] = crop
+    return page
+
+def split_and_center_text_blocks(img, d, lines_per_page=6, page_size=(1920, 1080), margin=80):
+    lines = []
+    for i in range(len(d['text'])):
+        if d['text'][i].strip() != '':
+            left = d['left'][i]
+            top = d['top'][i]
+            width = d['width'][i]
+            height = d['height'][i]
+            lines.append({'left': left, 'top': top, 'right': left+width, 'bottom': top+height})
+    lines = sorted(lines, key=lambda x: x['top'])
+    pages = [lines[i:i+lines_per_page] for i in range(0, len(lines), lines_per_page)]
+    result_pages = []
+    for page_lines in pages:
+        if not page_lines:
+            continue
+        min_top = min(l['top'] for l in page_lines)
+        max_bottom = max(l['bottom'] for l in page_lines)
+        min_left = min(l['left'] for l in page_lines)
+        max_right = max(l['right'] for l in page_lines)
+        crop = img[min_top:max_bottom, min_left:max_right]
+        # Yazı ile arka planı ayıran fonksiyonu uygula
+        page = crop_text_area(crop, margin=margin, page_size=page_size)
+        result_pages.append(page)
+    return result_pages
+
+def split_image_by_lines_no_ocr(img, lines_per_page=6, page_size=(1920, 1080), margin=40):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Yazı bölgelerini öne çıkar (beyaz zemin, koyu yazı için)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Gürültü temizliği ve satırları birleştirmek için yatay morfoloji
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (img.shape[1]//30, 3))
+    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    # Satır konturlarını bul
+    contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Her kontur için dikdörtgen bul ve üstten alta sırala
+    lines = [cv2.boundingRect(cnt) for cnt in contours]
+    lines = sorted(lines, key=lambda x: x[1])
+    # 6'şar gruplara ayır
+    pages = [lines[i:i+lines_per_page] for i in range(0, len(lines), lines_per_page)]
+    result_pages = []
+    for page_lines in pages:
+        if not page_lines:
+            continue
+        # Sayfa içindeki metin bloğunun sınırlarını bul
+        min_left = min([x for x, y, w, h in page_lines])
+        max_right = max([x+w for x, y, w, h in page_lines])
+        min_top = min([y for x, y, w, h in page_lines])
+        max_bottom = max([y+h for x, y, w, h in page_lines])
+        # Kenar boşluğu ekle
+        x1 = max(0, min_left - margin)
+        y1 = max(0, min_top - margin)
+        x2 = min(img.shape[1], max_right + margin)
+        y2 = min(img.shape[0], max_bottom + margin)
+        crop = img[y1:y2, x1:x2]
+        # Yeni beyaz sayfa oluştur ve ortala
+        page = np.full((page_size[1], page_size[0], 3), 255, dtype=np.uint8)
+        ch, cw = crop.shape[:2]
+        y_offset = (page_size[1] - ch) // 2
+        x_offset = (page_size[0] - cw) // 2
+        page[y_offset:y_offset+ch, x_offset:x_offset+cw] = crop
+        result_pages.append(page)
+    return result_pages
+
 def process_image(image_path, operation, params):
     global last_title, last_top
     current_title = ''
@@ -133,37 +221,14 @@ def process_image(image_path, operation, params):
                 cv2.imwrite(os.path.join('cropped', image_name), img)
             
             case 'splitter':
-                height, width, _ = img.shape
-                min_row_height = height // params[0]
-                current_top = min_row_height
-                previous_top = 0
-                i = 0
-                
-                # Ensure cropped directory exists
                 if not os.path.exists('cropped'):
                     os.makedirs('cropped')
                 
-                while i < params[0]:
-                    for j in range(len(d['top'])):
-                        if d['top'][j] > current_top:
-                            break
-                        if d['text'][j] == '':
-                            continue
-                        if d['top'][j] + d['height'][j] > current_top:
-                            current_top = d['top'][j] + d['height'][j]
-                    
-                    crop_img = img[previous_top:current_top, :]
-                    crop_img = remove_empty_rows_and_columns(crop_img)
-                    
-                    if not is_image_blank(crop_img):
-                        crop_img = add_outer_border(crop_img, top_border=50, bottom_border=50, left_border=10, right_border=10)
-                        crop_img = cv2.resize(crop_img, (1920, 1080))
-                        output_path = os.path.join('cropped', f"{image_name}_{i}.png")
-                        cv2.imwrite(output_path, crop_img)
-                    
-                    previous_top = current_top
-                    current_top += min_row_height
-                    i += 1
+                # OCR YOK: Satırları doğrudan görüntü işleme ile bul
+                pages = split_image_by_lines_no_ocr(img, lines_per_page=params[0], page_size=(1920, 1080), margin=40)
+                for i, page in enumerate(pages):
+                    output_path = os.path.join('cropped', f"{image_name}_{i}.png")
+                    cv2.imwrite(output_path, page)
 
     except Exception as e:
         print(f"Error processing image {image_path}: {e}")
@@ -193,13 +258,19 @@ def process_all_images(image_folder, operation, params, max_workers=None):
         print(f"Error in process_all_images: {e}")
 
 if __name__ == "__main__":
-    # Create the 'cropped' directory if it doesn't exist
+    # Sadece .png dosyalarını işle
+    image_folder = 'images'
     if not os.path.exists('cropped'):
         os.makedirs('cropped')
-    
-    # Determine number of CPU cores for parallel processing
     import multiprocessing
     num_cores = multiprocessing.cpu_count()
-    max_workers = max(1, num_cores)  # Leave one core free for system
-    
-    process_all_images('images', 'splitter', [6], max_workers=max_workers)
+    max_workers = max(1, num_cores)
+    # Sadece .png dosyalarını al
+    image_files = [os.path.join(image_folder, f) for f in os.listdir(image_folder)
+                   if os.path.isfile(os.path.join(image_folder, f)) and f.lower().endswith('.png')]
+    if image_files:
+        process_fn = partial(process_image, operation='splitter', params=[6])
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            executor.map(process_fn, image_files)
+    else:
+        print("No .png image files found in images folder.")
