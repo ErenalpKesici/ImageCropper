@@ -25,8 +25,12 @@ A comprehensive tool for image processing and document-to-PowerPoint conversion.
 - **Question Detection**: Automatically detect images containing questions and avoid splitting them
 
 ### Document Conversion (NEW!)
-- **Word to PowerPoint**: Convert .docx files to PowerPoint presentations
+- **Word to PowerPoint**: Convert .docx files to PowerPoint presentations  
 - **PDF to PowerPoint**: Convert .pdf files to PowerPoint presentations
+- **Table Detection & Preservation**: Automatically detects tables in documents and preserves them
+- **Professional Table Formatting**: Tables get dedicated slides with blue headers and proper styling
+- **Mixed Content Support**: Handles documents with both text and tables seamlessly
+- **Document Order Preservation**: Maintains original sequence (text → table → text → table)
 - **Configurable Layout**: Set how many lines per slide for optimal spacing
 - **Smart Formatting**: Automatic title detection and formatting
 
@@ -38,6 +42,24 @@ A comprehensive tool for image processing and document-to-PowerPoint conversion.
 pip install -r requirements.txt
 ```
 
+## Table Detection Features
+
+### Word Documents (.docx)
+- **Native Table Detection**: Recognizes Word tables and preserves structure
+- **Cell Content Extraction**: Maintains text formatting and cell relationships  
+- **Document Order**: Preserves sequence of tables and text as they appear
+
+### PDF Documents (.pdf)
+- **Enhanced Detection**: Uses `pdfplumber` library for superior table extraction
+- **Pattern Recognition**: Detects table-like text patterns as fallback
+- **Multi-format Support**: Handles pipe-separated, tab-separated, and space-aligned tables
+
+### PowerPoint Output
+- **Dedicated Table Slides**: Each table gets its own professionally formatted slide
+- **Professional Styling**: Blue headers (#4472C4) with white text for contrast
+- **Optimal Sizing**: Tables sized at 15" × 6.5" for maximum visibility
+- **Calibri Font**: 11pt font size optimized for readability
+
 ## Required Libraries
 
 ### Core Libraries
@@ -48,8 +70,9 @@ pip install -r requirements.txt
 
 ### Document Processing Libraries (for new features)
 - python-pptx
-- python-docx
+- python-docx  
 - PyPDF2
+- pdfplumber (for enhanced PDF table detection)
 
 ## Usage
 
