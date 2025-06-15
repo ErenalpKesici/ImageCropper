@@ -16,6 +16,9 @@ PyInstaller.__main__.run([
     '--add-data=tessdata;tessdata',
     '--hidden-import=PIL',
     '--hidden-import=PIL._tkinter_finder',
+    '--hidden-import=pptx',
+    '--hidden-import=docx',
+    '--hidden-import=PyPDF2',
 ])
 
 print("Build complete. Executable is in the dist folder.")
