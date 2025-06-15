@@ -1,0 +1,11 @@
+opencv-python
+pytesseract
+pillow
+numpy
+torch
+diffusers
+transformers
+accelerate
+python-pptx
+python-docx
+PyPDF2
