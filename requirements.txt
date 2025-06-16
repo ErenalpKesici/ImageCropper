@@ -9,3 +9,5 @@ accelerate
 python-pptx
 python-docx
 PyPDF2
+PyMuPDF
+pdfplumber

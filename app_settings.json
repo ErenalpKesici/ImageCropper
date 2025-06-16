@@ -1,0 +1,12 @@
+{
+  "last_saved": 1750076789.8404813,
+  "language": "en",
+  "operation": "doc_to_pptx",
+  "lines_per_slide": "3",
+  "line_spacing": "1.2",
+  "rows_per_page": "10",
+  "detect_questions": false,
+  "output_directory": "E:/bab/done",
+  "window_geometry": "800x900",
+  "window_position": "+142+55"
+}
