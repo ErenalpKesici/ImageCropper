@@ -193,8 +193,9 @@ class LanguageManager:
                 'title_text_color': 'Başlık metin rengi:',
                 'background_color': 'Arka plan rengi:',
                 'accent_color': 'Vurgu rengi:',
-                'choose_color': 'Renk Seçin',
-                'rows_per_page': 'Sayfa başına satır (resim bölme için):',
+                'choose_color': 'Renk Seçin',                'rows_per_page': 'Sayfa başına satır (resim bölme için):',
+                'max_splits': 'Maksimum bölme sayısı:',
+                'max_splits_help': 'Resmi kaç parçaya böleceğinizi belirler (1-5 arası)',
                 'detect_questions': 'Soruları algıla (bölme)',
                 
                 # Color settings
@@ -286,8 +287,9 @@ class LanguageManager:
                 'title_text_color': 'Title text color:',
                 'background_color': 'Background color:',
                 'accent_color': 'Accent color:',
-                'choose_color': 'Choose Color',
-                'rows_per_page': 'Rows per page (for image splitting):',
+                'choose_color': 'Choose Color',                'rows_per_page': 'Rows per page (for image splitting):',
+                'max_splits': 'Maximum number of splits:',
+                'max_splits_help': 'How many parts to split the image into (1-5 range)',
                 'detect_questions': 'Detect questions (splitting)',
                 
                 # Color settings
@@ -1152,15 +1154,20 @@ class ImageCropperApp:
                     output_path = os.path.join(self.output_dir, image_name)
                     cv2.imwrite(output_path, cleaned_img)
                 else:
-                    # Split into 2 parts
-                    height, width = img.shape[:2]
-                    mid_height = height // 2
+                    # Intelligent split that avoids cutting through text
+                    max_splits = params.get('max_splits', 2)  # Default to 2 parts, but configurable
                     
-                    for i in range(2):
-                        if i == 0:
-                            crop_img = img[0:mid_height, :]
-                        else:
-                            crop_img = img[mid_height:, :]
+                    if max_splits > 2:
+                        # Use advanced multi-split analysis for complex images
+                        split_points = self.find_multiple_split_points(img, max_splits)
+                    else:
+                        # Use simple 2-way split with text analysis
+                        split_points = self.find_optimal_split_points(img)
+                    
+                    print(f"🎯 Applying {len(split_points)} intelligent splits")
+                    
+                    for i, (start_y, end_y) in enumerate(split_points):
+                        crop_img = img[start_y:end_y, :]
                         
                         crop_img = remove_empty_rows_and_columns(crop_img)
                         crop_img = add_outer_border(crop_img, top_border=100, bottom_border=100, left_border=40, right_border=40)
@@ -1234,10 +1241,20 @@ class ImageCropperApp:
             except ValueError:
                 rows_per_page = 10
             
+            try:
+                max_splits = int(self.max_splits_var.get())
+                if max_splits < 1:
+                    max_splits = 2
+                elif max_splits > 5:  # Limit to reasonable number
+                    max_splits = 5
+            except (ValueError, AttributeError):
+                max_splits = 2
+            
             params = {
                 'lines_per_slide': lines_per_slide,
                 'rows_per_page': rows_per_page,
-                'detect_questions': self.detect_questions_var.get()
+                'detect_questions': self.detect_questions_var.get(),
+                'max_splits': max_splits
             }
             
             # Reset progress
@@ -2456,6 +2473,24 @@ class ImageCropperApp:
             'widgets': [rows_label, rows_entry]
         }
         
+        # Maximum splits configuration
+        splits_frame = ttk.Frame(parent_frame)
+        splits_label = ttk.Label(splits_frame, text=self.lang.get_text('max_splits'))
+        splits_label.pack(anchor=tk.W, pady=(10, 0))
+        
+        self.max_splits_var = tk.StringVar(value="2")
+        splits_entry = ttk.Entry(splits_frame, textvariable=self.max_splits_var, width=10)
+        splits_entry.pack(anchor=tk.W, pady=5)
+        
+        splits_help = ttk.Label(splits_frame, text=self.lang.get_text('max_splits_help'), 
+                               font=("Arial", 8), foreground="gray")
+        splits_help.pack(anchor=tk.W, pady=2)
+        
+        self.dynamic_widgets['splitter_max_splits'] = {
+            'frame': splits_frame,
+            'widgets': [splits_label, splits_entry, splits_help]
+        }
+        
         # Question detection
         question_frame = ttk.Frame(parent_frame)
         self.detect_questions_var = tk.BooleanVar(value=True)
@@ -2497,6 +2532,7 @@ class ImageCropperApp:
         elif operation == "splitter":
             # Show splitter fields
             self.dynamic_widgets['splitter_rows']['frame'].pack(fill=tk.X, pady=5)
+            self.dynamic_widgets['splitter_max_splits']['frame'].pack(fill=tk.X, pady=5)
             self.dynamic_widgets['splitter_questions']['frame'].pack(fill=tk.X, pady=5)
             
         # Other operations (title_cropper, blank_remover) don't need extra fields currently
@@ -2549,6 +2585,169 @@ class ImageCropperApp:
             
         except Exception as e:
             print(f"Error updating dynamic field text: {e}")
+    
+    def find_optimal_split_points(self, img):
+        """Find optimal split points that avoid cutting through text lines"""
+        try:
+            img_height, width = img.shape[:2]
+            
+            # Use OCR to detect text lines and their positions
+            custom_config = r'-l tur --oem 3 --psm 6'
+            data = pytesseract.image_to_data(img, config=custom_config, output_type=pytesseract.Output.DICT)
+            
+            # Extract text line boundaries
+            text_lines = []
+            for i, text in enumerate(data['text']):
+                if text.strip():  # Non-empty text
+                    top = data['top'][i]
+                    height_text = data['height'][i]
+                    bottom = top + height_text
+                    text_lines.append((top, bottom))
+            
+            if not text_lines:
+                # No text detected, fallback to simple middle split
+                print("⚠️ No text detected, using fallback middle split")
+                mid_height = img_height // 2
+                return [(0, mid_height), (mid_height, img_height)]
+            
+            # Sort text lines by vertical position
+            text_lines.sort()
+            
+            # Find gaps between text lines
+            gaps = []
+            for i in range(len(text_lines) - 1):
+                gap_start = text_lines[i][1]  # Bottom of current line
+                gap_end = text_lines[i + 1][0]  # Top of next line
+                gap_size = gap_end - gap_start
+                
+                if gap_size > 20:  # Minimum gap size to consider for splitting
+                    gap_center = (gap_start + gap_end) // 2
+                    gaps.append((gap_center, gap_size))
+            
+            if not gaps:
+                # No suitable gaps found, use fallback
+                print("⚠️ No suitable text gaps found, using fallback middle split")
+                mid_height = img_height // 2
+                return [(0, mid_height), (mid_height, img_height)]
+            
+            # Find the gap closest to the middle of the image
+            target_middle = img_height // 2
+            best_gap = min(gaps, key=lambda gap: abs(gap[0] - target_middle))
+            optimal_split_y = best_gap[0]
+            
+            print(f"📏 Found optimal split point at y={optimal_split_y} (target was y={target_middle})")
+            print(f"✂️ Splitting image: [0:{optimal_split_y}] and [{optimal_split_y}:{img_height}]")
+            
+            return [(0, optimal_split_y), (optimal_split_y, img_height)]
+            
+        except Exception as e:
+            print(f"⚠️ Error in intelligent split analysis: {e}")
+            # Fallback to simple middle split
+            img_height, width = img.shape[:2]
+            mid_height = img_height // 2
+            return [(0, mid_height), (mid_height, img_height)]
+    
+    def find_text_free_zones(self, img):
+        """Find horizontal zones with minimal text content using both OCR and visual analysis"""
+        try:
+            img_height, width = img.shape[:2]
+            
+            # Method 1: OCR-based text detection
+            custom_config = r'-l tur --oem 3 --psm 6'
+            data = pytesseract.image_to_data(img, config=custom_config, output_type=pytesseract.Output.DICT)
+            
+            # Create a map of text density per row
+            text_density = np.zeros(img_height)
+            
+            for i, text in enumerate(data['text']):
+                if text.strip():
+                    top = data['top'][i]
+                    height_text = data['height'][i]
+                    bottom = min(top + height_text, img_height - 1)
+                    
+                    # Add weight to rows containing text
+                    for y in range(max(0, top), bottom + 1):
+                        if y < img_height:
+                            text_density[y] += len(text.strip())
+            
+            # Method 2: Visual analysis - detect horizontal lines with low content
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Calculate row-wise variance (low variance = likely empty/uniform areas)
+            row_variance = np.var(gray, axis=1)
+            
+            # Combine OCR text density with visual analysis
+            combined_score = text_density + (row_variance / np.max(row_variance) * 50)
+            
+            # Smooth the score to avoid noise
+            kernel_size = min(21, img_height // 10)  # Adaptive kernel size
+            if kernel_size % 2 == 0:
+                kernel_size += 1  # Ensure odd kernel size
+            smoothed_score = cv2.GaussianBlur(combined_score.reshape(-1, 1), (1, kernel_size), 0).flatten()
+            
+            return smoothed_score
+            
+        except Exception as e:
+            print(f"⚠️ Error in text-free zone analysis: {e}")
+            return np.ones(img.shape[0])  # Return uniform scores as fallback
+    
+    def find_multiple_split_points(self, img, max_splits=3):
+        """Find multiple optimal split points for complex images"""
+        try:
+            img_height, width = img.shape[:2]
+            
+            # Get text-free zones analysis
+            content_scores = self.find_text_free_zones(img)
+            
+            # Find local minima (areas with least content)
+            min_gap_size = img_height // 20  # Minimum 5% of image height
+            potential_splits = []
+            
+            for i in range(min_gap_size, img_height - min_gap_size):
+                # Check if this is a local minimum
+                window_start = max(0, i - min_gap_size // 2)
+                window_end = min(img_height, i + min_gap_size // 2)
+                
+                if content_scores[i] == np.min(content_scores[window_start:window_end]):
+                    potential_splits.append((i, content_scores[i]))
+            
+            if not potential_splits:
+                # No good splits found, fallback to simple middle split
+                mid_height = img_height // 2
+                return [(0, mid_height), (mid_height, img_height)]
+            
+            # Sort by content score (ascending - prefer areas with less content)
+            potential_splits.sort(key=lambda x: x[1])
+            
+            # Select the best splits, ensuring they're well-spaced
+            selected_splits = []
+            min_distance = img_height // 4  # Minimum distance between splits
+            
+            for split_y, score in potential_splits:
+                # Check if this split is far enough from already selected splits
+                if all(abs(split_y - selected) >= min_distance for selected in selected_splits):
+                    selected_splits.append(split_y)
+                    if len(selected_splits) >= max_splits - 1:
+                        break
+            
+            # Always include image boundaries and sort
+            selected_splits.extend([0, img_height])
+            selected_splits = sorted(set(selected_splits))
+            
+            # Create split ranges
+            split_ranges = []
+            for i in range(len(selected_splits) - 1):
+                split_ranges.append((selected_splits[i], selected_splits[i + 1]))
+            
+            print(f"📐 Selected {len(split_ranges)} split ranges: {split_ranges}")
+            
+            return split_ranges
+            
+        except Exception as e:
+            print(f"⚠️ Error in multiple split analysis: {e}")
+            # Fallback to simple split
+            mid_height = img_height // 2
+            return [(0, mid_height), (mid_height, img_height)]
     
 if __name__ == "__main__":
     root = tk.Tk()

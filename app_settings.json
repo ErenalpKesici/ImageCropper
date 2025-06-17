@@ -1,21 +1,23 @@
 {
   "language": "en",
   "output_directory": "E:/bab/done",
-  "last_input_directory": "E:/bab",
+  "last_input_directory": "D:/baba/werw",
   "lines_per_slide": "4",
-  "rows_per_page": "10",
+  "rows_per_page": "6",
   "detect_questions": false,
   "selected_operation": "splitter",
   "line_spacing": "1.2",
   "window_geometry": "800x900",
   "window_position": "+155+189",
-  "recent_files": [
-    "E:/bab/1.5.6331.pdf"
+  "recent_files": [],
+  "recent_folders": [
+    "D:/baba/werw",
+    "D:/baba/iş kazası- 194 s- 151 s-031123 (1)",
+    "D:/baba/wer"
   ],
-  "recent_folders": [],
-  "title_text_color": "#730e8c",
-  "background_color": "#8000ff",
+  "title_text_color": "#000000",
+  "background_color": "#ffffff",
   "accent_color": "#1f497d",
-  "last_saved": 1750147778.9483426,
-  "operation": "doc_to_pptx"
+  "last_saved": 1750195144.6902149,
+  "operation": "splitter"
 }
