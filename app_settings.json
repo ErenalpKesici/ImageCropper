@@ -1,12 +1,21 @@
 {
-  "last_saved": 1750076789.8404813,
   "language": "en",
-  "operation": "doc_to_pptx",
-  "lines_per_slide": "3",
-  "line_spacing": "1.2",
+  "output_directory": "E:/bab/done",
+  "last_input_directory": "E:/bab",
+  "lines_per_slide": "4",
   "rows_per_page": "10",
   "detect_questions": false,
-  "output_directory": "E:/bab/done",
+  "selected_operation": "splitter",
+  "line_spacing": "1.2",
   "window_geometry": "800x900",
-  "window_position": "+142+55"
+  "window_position": "+155+189",
+  "recent_files": [
+    "E:/bab/1.5.6331.pdf"
+  ],
+  "recent_folders": [],
+  "title_text_color": "#730e8c",
+  "background_color": "#8000ff",
+  "accent_color": "#1f497d",
+  "last_saved": 1750147778.9483426,
+  "operation": "doc_to_pptx"
 }

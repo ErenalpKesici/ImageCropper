@@ -87,18 +87,16 @@ class SettingsManager:
             'last_input_directory': os.getcwd(),
             'lines_per_slide': 7,
             'rows_per_page': 10,
-            'detect_questions': True,
-            'selected_operation': 'splitter',            'window_geometry': '800x900',
+            'detect_questions': True,            'selected_operation': 'splitter',
+            'line_spacing': 1.5,
+            'window_geometry': '800x900',
             'window_position': None,
             'recent_files': [],
             'recent_folders': [],
             # PowerPoint color settings (hex format)
             'title_text_color': '#000000',
-            'content_text_color': '#000000', 
-            'title_background_color': '#FFFFFF',
-            'slide_background_color': '#FFFFFF',
-            'accent_color': '#1F497D',
-            'table_header_color': '#4472C4'
+            'background_color': '#ffffff', 
+            'accent_color': '#1f497d'
         }
         self.settings = self.default_settings.copy()
         self.load_settings()
@@ -190,7 +188,12 @@ class LanguageManager:
                   # Parameters
                 'lines_per_slide': 'Slayt başına satır (belge dönüşümü için):',
                 'lines_recommendation': 'Önerilen: Taşma olmaması için 5-8 satır, büyük fontlar',
-                'line_spacing': 'Satır aralığı:',                'line_spacing_recommendation': 'Önerilen: 1.2-2.0 arası (varsayılan: 1.5)',
+                'line_spacing': 'Satır aralığı:',
+                'line_spacing_recommendation': 'Önerilen: 1.2-2.0 arası (varsayılan: 1.5)',
+                'title_text_color': 'Başlık metin rengi:',
+                'background_color': 'Arka plan rengi:',
+                'accent_color': 'Vurgu rengi:',
+                'choose_color': 'Renk Seçin',
                 'rows_per_page': 'Sayfa başına satır (resim bölme için):',
                 'detect_questions': 'Soruları algıla (bölme)',
                 
@@ -278,7 +281,12 @@ class LanguageManager:
                   # Parameters
                 'lines_per_slide': 'Lines per slide (for document conversion):',
                 'lines_recommendation': 'Recommended: 5-8 lines for no overflow, larger fonts',
-                'line_spacing': 'Line spacing:',                'line_spacing_recommendation': 'Recommended: 1.2-2.0 range (default: 1.5)',
+                'line_spacing': 'Line spacing:',
+                'line_spacing_recommendation': 'Recommended: 1.2-2.0 range (default: 1.5)',
+                'title_text_color': 'Title text color:',
+                'background_color': 'Background color:',
+                'accent_color': 'Accent color:',
+                'choose_color': 'Choose Color',
                 'rows_per_page': 'Rows per page (for image splitting):',
                 'detect_questions': 'Detect questions (splitting)',
                 
@@ -879,7 +887,7 @@ class ImageCropperApp:
         available_height_pt = available_height_inches * 72  # Convert inches to points
         
         # Define size ranges based on text type - increased max sizes for better utilization
-        min_size_arr = [('title', 24), ('subtitle', 22), ('bullet', 18), ('content', 16)]
+        min_size_arr = [('title', 22), ('subtitle', 20), ('bullet', 16), ('content', 14)]
         min_size_dict = dict(min_size_arr)
         min_size = min_size_dict[text_type]
         max_size = min_size * 3
@@ -907,7 +915,7 @@ class ImageCropperApp:
         print(f"📏 Font sizing: {len(lines)} lines, {text_type} -> {optimal_size}pt (range: {min_size}-{max_size}pt)")
         return optimal_size
     
-    def detect_and_fix_overflow(self, text_frame, lines, available_height_inches):
+    def detect_and_fix_overflow(self, text_frame, available_height_inches):
         """Detect text overflow and automatically reduce font sizes to fit"""
         available_height_pt = available_height_inches * 72
         max_attempts = 8  # Prevent infinite loops
@@ -996,6 +1004,18 @@ class ImageCropperApp:
         """Create slide with dynamic font sizing for maximum content optimization"""
         slide = prs.slides.add_slide(slide_layout)
         
+        # Set slide background color if custom color is specified
+        bg_rgb = self.get_color_setting('background_color', '#ffffff')
+        if bg_rgb != (255, 255, 255):  # Only set if not default white
+            try:
+                # Set slide background color
+                background = slide.background
+                fill = background.fill
+                fill.solid()
+                fill.fore_color.rgb = RGBColor(*bg_rgb)
+            except Exception as e:
+                print(f"Could not set background color: {e}")
+        
         # Use FULL slide dimensions for maximum space utilization
         left = Inches(0.3)      # Minimal left margin
         top = 0 # Inches(0.3)       # Minimal top margin  
@@ -1009,21 +1029,15 @@ class ImageCropperApp:
         text_frame.line_spacing = line_spacing
         
         # Minimal margins for maximum space
-        text_frame.margin_left = Inches(0.05)
-        text_frame.margin_right = Inches(0.05)
-        text_frame.margin_top = Inches(0.05)
-        text_frame.margin_bottom = Inches(0.05)
+        text_frame.margin_left = Inches(0.1)
+        text_frame.margin_right = Inches(0.1)
+        text_frame.margin_top = Inches(0.0)
+        text_frame.margin_bottom = Inches(0.0)
         
         # Available height for text (accounting for minimal margins)
         available_height = height - Inches(0.1)  # Subtract tiny margins
-        
-        # Check if first line is a title
-        is_title = len(lines) > 0 and (
-            lines[0].isupper() or 
-            len(lines[0]) < 50 or 
-            any(keyword in lines[0].lower() for keyword in 
-                ['chapter', 'section', 'introduction', 'conclusion', 'summary', 'overview'])
-        )
+          # Check if first line is a title using improved logic
+        is_title = self.is_better_title(lines[0] if lines else "", 0, lines)
         
         # Calculate optimal font sizes for different content types
         title_lines = [lines[0]] if is_title and len(lines) > 0 else []
@@ -1048,20 +1062,20 @@ class ImageCropperApp:
                 p = text_frame.paragraphs[0]
             else:
                 p = text_frame.add_paragraph()
-            
-            # Enhance text with Unicode symbols where appropriate
-            enhanced_text = self.add_unicode_symbols_to_text(line)
+              # Enhance text with Unicode symbols where appropriate
+            is_current_line_title = (i == 0 and is_title)
+            enhanced_text = self.add_unicode_symbols_to_text(line, is_current_line_title)
             p.text = enhanced_text
             p.font.name = 'Calibri'
             p.word_wrap = True
             
             # Dynamic font sizing based on content type and available space
-            if i == 0 and is_title:
-                # Title: Dynamic sizing with emphasis
+            if i == 0 and is_title:                # Title: Dynamic sizing with emphasis
                 p.font.size = Pt(max(title_font_size, 18))  # Minimum 18pt for titles
                 p.font.bold = True
                 p.alignment = PP_ALIGN.CENTER
-                p.font.color.rgb = RGBColor(31, 73, 125)
+                title_rgb = self.get_color_setting('title_text_color', '#1f497d')
+                p.font.color.rgb = RGBColor(*title_rgb)
                 p.space_after = Pt(max(4, title_font_size // 4))
             elif line.startswith(('•', '-', '*', '▪', '○')) or any(line.startswith(f'{j}.') for j in range(1, 50)):
                 # Bullet points: Slightly smaller than regular content
@@ -1098,7 +1112,7 @@ class ImageCropperApp:
                 available_height_value = 8.3  # Default fallback
         
         print(f"📐 Available height for overflow detection: {available_height_value} inches")
-        self.detect_and_fix_overflow(text_frame, lines, available_height_value)
+        self.detect_and_fix_overflow(text_frame, available_height_value)
         print("✅ Overflow check complete")
         
         # Add icons and visual elements to enhance the slide
@@ -1446,7 +1460,8 @@ class ImageCropperApp:
                                             'type': 'table',
                                             'content': [table_row],
                                             'rows': 1,
-                                            'cols': len(table_row),                                            'page': page_num + 1
+                                            'cols': len(table_row),
+                                            'page': page_num + 1
                                         })
                                     else:
                                         content_items.append({
@@ -1480,6 +1495,62 @@ class ImageCropperApp:
         
         return content_items
     
+    def reconstruct_line_from_spans(self, sorted_spans):
+        """Reconstruct a text line from sorted spans, handling spacing intelligently"""
+        if not sorted_spans:
+            return ""
+        
+        line_text = ""
+        prev_x_end = None
+        
+        for span in sorted_spans:
+            span_text = span['text']
+            bbox = span['bbox']
+            x_start = bbox[0]
+            x_end = bbox[2]
+            
+            # Add appropriate spacing between spans
+            if prev_x_end is not None:
+                gap = x_start - prev_x_end
+                
+                # Determine if we need to add space based on gap size
+                if gap > 5:  # Significant gap - likely a space or tab
+                    if not line_text.endswith(' ') and not span_text.startswith(' '):
+                        line_text += ' '
+                elif gap < -2:  # Overlapping - might be bold/italic overlay
+                    # Don't add space for overlapping spans
+                    pass
+                # For small gaps (0-5), rely on existing spacing in the text
+            
+            line_text += span_text
+            prev_x_end = x_end
+        
+        return line_text
+    
+    def group_spans_by_visual_lines(self, spans_data, y_tolerance=2):
+        """Group spans by their visual line position with tolerance for slight y variations"""
+        line_groups = {}
+        
+        for span_info in spans_data:
+            y_pos = span_info['bbox'][1]
+            
+            # Find existing line group within tolerance
+            matched_y = None
+            for existing_y in line_groups.keys():
+                if abs(y_pos - existing_y) <= y_tolerance:
+                    matched_y = existing_y
+                    break
+            
+            # Use existing group or create new one
+            target_y = matched_y if matched_y is not None else y_pos
+            
+            if target_y not in line_groups:
+                line_groups[target_y] = []
+            
+            line_groups[target_y].append(span_info)
+        
+        return line_groups
+    
     def extract_text_with_pymupdf(self, document_path):
         """Extract text using PyMuPDF (fitz) for high-quality Turkish text extraction"""
         content_items = []
@@ -1495,32 +1566,50 @@ class ImageCropperApp:
                 
                 # Method 1: Try structured text extraction first (preserves formatting)
                 text_dict = page.get_text("dict")
-                
-                # Method 2: Also get raw text for comparison and fallback
+                  # Method 2: Also get raw text for comparison and fallback
                 raw_text = page.get_text()
                 
                 current_paragraph = []
                 extracted_blocks = []
                 
+                # Collect all spans with their positions
+                all_spans = []
+                
                 # Process structured text first
                 for block in text_dict["blocks"]:
                     if "lines" in block:  # Text block
-                        block_text = ""
                         for line in block["lines"]:
-                            line_text = ""
                             for span in line["spans"]:
-                                # Get text with original formatting preserved
                                 span_text = span["text"]
                                 if span_text.strip():
-                                    line_text += span_text
-                            
-                            if line_text.strip():
-                                # Clean line breaks and excessive spaces within the line
-                                line_text = " ".join(line_text.split())
-                                block_text += line_text + " "
-                        
-                        if block_text.strip():
-                            extracted_blocks.append(block_text.strip())
+                                    all_spans.append({
+                                        'text': span_text,
+                                        'bbox': span["bbox"],
+                                        'x': span["bbox"][0],
+                                        'y': span["bbox"][1]
+                                    })
+                
+                # Group spans by visual lines (y-coordinate with tolerance)
+                line_groups = self.group_spans_by_visual_lines(all_spans, y_tolerance=3)
+                
+                # Sort lines by y-coordinate and process each visual line
+                sorted_y_positions = sorted(line_groups.keys())
+                
+                for y_pos in sorted_y_positions:
+                    spans_in_line = line_groups[y_pos]
+                    
+                    # Sort spans within the line by x-coordinate (left to right)
+                    sorted_spans = sorted(spans_in_line, key=lambda s: s['x'])
+                      # Combine spans into a single line, handling spacing intelligently
+                    line_text = self.reconstruct_line_from_spans(sorted_spans)
+                    
+                    # Clean and add the reconstructed line
+                    if line_text.strip():
+                        extracted_blocks.append(line_text.strip())
+                
+                print(f"Extracted {len(extracted_blocks)} visual lines from page {page_num + 1}")
+                if extracted_blocks:
+                    print("Sample lines:", extracted_blocks[:3])
                 
                 # If structured extraction worked, use it
                 if extracted_blocks:
@@ -1719,13 +1808,13 @@ class ImageCropperApp:
                     for paragraph in cell.text_frame.paragraphs:
                         paragraph.font.name = 'Calibri'
                         paragraph.font.size = Pt(11)  # Slightly smaller for tables
-                        
-                        # Make header row bold and centered
-                        if row_idx == 0:
+                          # Make header row bold and centered
+                        if row_idx ==  0:
                             paragraph.font.bold = True
                             paragraph.alignment = PP_ALIGN.CENTER
                             cell.fill.solid()
-                            cell.fill.fore_color.rgb = RGBColor(68, 114, 196)  # Blue header
+                            accent_rgb = self.get_color_setting('accent_color', '#4472c4')
+                            cell.fill.fore_color.rgb = RGBColor(*accent_rgb)
                             paragraph.font.color.rgb = RGBColor(255, 255, 255)  # White text
                         else:
                             paragraph.font.bold = False
@@ -1751,8 +1840,6 @@ class ImageCropperApp:
             
             # Add content-based icons
             self.add_content_icons(slide, lines)
-              # Add visual accent elements
-            self.add_visual_accents(slide)
             
         except Exception as e:
             print(f"⚠️  Note: Could not add visual elements: {e}")
@@ -1768,13 +1855,13 @@ class ImageCropperApp:
             top = Inches(1.8)  # Moved down to be below title text
             width = Inches(12)
             height = Inches(0.02)
-            
             line_shape = slide.shapes.add_shape(
                 MSO_SHAPE.RECTANGLE, left, top, width, height
             )
             line_shape.fill.solid()
-            line_shape.fill.fore_color.rgb = RGBColor(31, 73, 125)  # Blue accent
-            line_shape.line.color.rgb = RGBColor(31, 73, 125)
+            accent_rgb = self.get_color_setting('accent_color', '#1f497d')
+            line_shape.fill.fore_color.rgb = RGBColor(*accent_rgb)
+            line_shape.line.color.rgb = RGBColor(*accent_rgb)
             
         except Exception as e:
             print(f"⚠️  Could not add header line: {e}")
@@ -1803,6 +1890,7 @@ class ImageCropperApp:
                     icon_color = RGBColor(255, 193, 7)  # Amber
                 # elif line.startswith(('•', '-', '*', '▪', '○')) or any(line.startswith(f'{j}.') for j in range(1, 10)):
                 #     # Bullet point icon
+               
                 #     icon_shape = MSO_SHAPE.OVAL
                 #     icon_color = RGBColor(40, 167, 69)  # Green
                 elif any(keyword in line.lower() for keyword in ['important', 'note', 'warning', 'dikkat']):
@@ -1834,37 +1922,133 @@ class ImageCropperApp:
         except Exception as e:
             print(f"⚠️  Could not add icon: {e}")
     
-    def add_visual_accents(self, slide):
-        """Add subtle visual accent elements"""
-        try:
-            from pptx.enum.shapes import MSO_SHAPE
+    def is_better_title(self, line, line_index=0, context_lines=None):
+        """
+        Improved title detection logic with stricter criteria:
+        1. Must be short (< 80 chars)
+        2. Should be uppercase OR contain title keywords OR have strong title structure
+        3. Should NOT end with punctuation that suggests continuation
+        4. Should NOT be obviously a question in the middle of content
+        5. Should NOT contain common non-title patterns (verb endings, articles, etc.)
+        """
+        if not line or len(line.strip()) == 0:
+            return False
             
-            # Add corner accent elements
-            self.add_corner_accent(slide, Inches(0.1), Inches(0.1))  # Top-left
-            self.add_corner_accent(slide, Inches(15.7), Inches(8.7))  # Bottom-right
+        line = line.strip()
+        
+        # Too long to be a title
+        if len(line) > 80:
+            return False
             
-        except Exception as e:
-            print(f"⚠️  Could not add visual accents: {e}")
+        # If it ends with continuation punctuation, probably not a title
+        if line.endswith(('...', ':', ';', ',', '-')):
+            return False
+            
+        # If it's a question in the middle of content, probably not a title
+        if line.endswith('?') and line_index > 0:
+            # Check if this looks like a content question vs title question
+            question_words = ['ne', 'nasıl', 'neden', 'niçin', 'kim', 'nerede', 'ne zaman',
+                             'where', 'what', 'how', 'why', 'when', 'who', 'which']
+            if any(word in line.lower() for word in question_words):
+                return False  # Content question, not title
+                  # Negative indicators - patterns that suggest this is NOT a title
+        line_lower = line.lower()
+        line_words = line_lower.split()
+        
+        # Common Turkish verb endings and patterns that indicate regular content
+        # Check for whole words and specific endings
+        non_title_words = ['bir', 'bu', 'şu', 'o', 'ile', 'için', 'gibi', 
+                          'the', 'a', 'an', 'is', 'are', 'was', 'were']
+        non_title_endings = ['dir', 'dır', 'dur', 'dür', 'ler', 'lar', 
+                            'den', 'dan', 'ten', 'tan', 'nın', 'nin', 'nun', 'nün',
+                            'da', 'de', 'ta', 'te']
+        specific_verbs = ['yetkilidir', 'edilir', 'yapılır', 'olur', 'bulur']
+          # Check for negative patterns
+        has_non_title_pattern = False
+        
+        # Check whole words first (most definitive)
+        if any(word in line_words for word in non_title_words):
+            has_non_title_pattern = True
+        
+        # Check specific verb forms (but allow title case to override)
+        elif any(verb in line_lower for verb in specific_verbs):
+            # Check if it's title case first
+            if len(line_words) <= 3:
+                capitalized_words = [w for w in line.split() if w and w[0].isupper()]
+                if len(capitalized_words) >= len(line.split()) * 0.6:  # 60% capitalized
+                    has_non_title_pattern = False  # Title case overrides verb endings
+                else:
+                    has_non_title_pattern = True
+            else:
+                has_non_title_pattern = True
+                
+        # Check word endings (but be more careful)
+        elif any(word.endswith(ending) for word in line_words for ending in non_title_endings):
+            # Additional check: if it's a single word ending with these, it might still be a title
+            # if it's capitalized and not obviously a verb
+            if len(line_words) == 1 and line_words[0][0].isupper():
+                has_non_title_pattern = False  # Single capitalized word might be a title
+            # Also check if it's clearly title case (most words capitalized)
+            elif len(line_words) <= 3:
+                capitalized_words = [w for w in line.split() if w and w[0].isupper()]
+                if len(capitalized_words) >= len(line.split()) * 0.6:  # 60% capitalized
+                    has_non_title_pattern = False  # Title case overrides endings
+                else:
+                    has_non_title_pattern = True
+            else:
+                has_non_title_pattern = True
+        
+        # Strong title indicators
+        if line.isupper() and len(line) > 2:
+            return True
+            
+        # Title keywords (case insensitive)
+        title_keywords = ['başlık', 'giriş', 'bölüm', 'sonuç', 'özet', 'genel bakış', 
+                         'introduction', 'chapter', 'conclusion', 'summary', 'overview',
+                         'madde', 'kısım', 'section', 'part']
+        has_title_keyword = any(keyword in line_lower for keyword in title_keywords)
+        
+        if has_title_keyword:
+            return True
+            
+        # Numbers at start might indicate sections/chapters
+        if line_lower.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', 
+                                 'i.', 'ii.', 'iii.', 'iv.', 'v.', 'a.', 'b.', 'c.')):
+            return True
+              # For short text at the beginning, be more restrictive
+        if line_index == 0 and len(line) < 50:
+            # Only consider it a title if it doesn't have non-title patterns
+            # AND has some title-like characteristics
+            if has_non_title_pattern:
+                return False
+                
+            # Additional title indicators for short text
+            # Check if it looks like a proper noun or title case
+            words = line.split()
+            if len(words) <= 4:  # Short phrases might be titles
+                # Check if most words are capitalized (title case)
+                capitalized_words = [w for w in words if w and w[0].isupper()]
+                if len(capitalized_words) >= len(words) * 0.6:  # At least 60% capitalized
+                    return True
+                    
+            # Very short (< 20 chars), no negative patterns, and meaningful length might be title
+            if len(line) < 20 and not has_non_title_pattern and len(line) > 3:
+                return True
+                
+        return False
     
-    def add_corner_accent(self, slide, x, y):
-        """Add a small decorative corner accent"""
-        try:
-            from pptx.enum.shapes import MSO_SHAPE
+    def add_unicode_symbols_to_text(self, text, is_title_line=False):
+        """Enhanced Unicode symbols with better logic for when to add them"""
+        # Don't add question mark symbol to titles 
+        if is_title_line:
+            return text
             
-            size = Inches(0.1)
-            accent = slide.shapes.add_shape(MSO_SHAPE.OVAL, x, y, size, size)
-            accent.fill.solid()
-            accent.fill.fore_color.rgb = RGBColor(200, 200, 200)  # Light gray
-            accent.line.width = Inches(0)  # No border
-            
-        except Exception as e:
-            print(f"⚠️  Could not add corner accent: {e}")
-    
-    def add_unicode_symbols_to_text(self, text):
-        """Add Unicode symbols to enhance text content"""
-        # Add relevant symbols based on content
-        if any(keyword in text.lower() for keyword in ['question', '?', 'soru']):
-            return f"❓ {text}"
+        # Only add question symbol to actual questions (not just any text with ?)
+        if text.strip().endswith('?'):            # Check if it's actually a question vs just ends with ?
+            question_indicators = ['ne', 'nasıl', 'neden', 'niçin', 'kim', 'nerede', 'ne zaman',
+                                 'what', 'how', 'why', 'when', 'where', 'who', 'which']
+            if any(indicator in text.lower() for indicator in question_indicators):
+                return f"❓ {text}"
         elif any(keyword in text.lower() for keyword in ['important', 'önemli', 'dikkat']):
             return f"⚠️ {text}"
         elif any(keyword in text.lower() for keyword in ['example', 'örnek']):
@@ -1872,7 +2056,7 @@ class ImageCropperApp:
         elif any(keyword in text.lower() for keyword in ['note', 'not']):
             return f"📝 {text}"
         elif text.startswith(('•', '-', '*')):
-            return f"▶️ {text[1:].strip()}"  # Replace bullet with arrow            return f"🔸 {text}"
+            return f"▶️ {text[1:].strip()}"  # Replace bullet with arrow
         else:
             return text
     
@@ -2054,7 +2238,6 @@ class ImageCropperApp:
             'ç ı': 'çı', 'ç e': 'çe', 'ç a': 'ça', 'ç i': 'çi',
             'ü ş': 'üş', 'ü r': 'ür', 'ü n': 'ün', 'ü m': 'üm',
             'ö n': 'ön', 'ö r': 'ör', 'ö l': 'öl', 'ö z': 'öz',
-            'ı ': 'ı', 'i ': 'i',
             
             # Common word patterns that get broken
             'y e': 'ye', 'y a': 'ya', 'y i': 'yi', 'y u': 'yu', 'y ö': 'yö',
@@ -2142,13 +2325,119 @@ class ImageCropperApp:
         
         spacing_rec_label = ttk.Label(spacing_frame, text=self.lang.get_text('line_spacing_recommendation'), font=("Arial", 8))
         spacing_rec_label.pack(anchor=tk.W)
-          self.dynamic_widgets['ppt_spacing'] = {
+        self.dynamic_widgets['ppt_spacing'] = {
             'frame': spacing_frame,
             'widgets': [spacing_label, spacing_entry, spacing_rec_label]
         }
         
         # Color settings
         self.create_color_selection_fields(parent_frame)
+    
+    def create_color_selection_fields(self, parent_frame):
+        """Create color selection fields for PowerPoint customization"""
+        # Title text color
+        title_color_frame = ttk.Frame(parent_frame)
+        title_color_label = ttk.Label(title_color_frame, text=self.lang.get_text('title_text_color'))
+        title_color_label.pack(anchor=tk.W, pady=(10, 0))
+        title_color_button = ttk.Button(
+            title_color_frame, 
+            text="Color: " + (self.settings.get('title_text_color') or '#000000'),
+            width=15,
+            command=lambda: self.choose_color('title_text_color', title_color_button)
+        )
+        title_color_button.pack(anchor=tk.W, pady=(5, 0))
+        
+        self.dynamic_widgets['ppt_title_color'] = {
+            'frame': title_color_frame,
+            'widgets': [title_color_label, title_color_button],
+            'color_button': title_color_button
+        }
+        
+        # Background color
+        bg_color_frame = ttk.Frame(parent_frame)
+        bg_color_label = ttk.Label(bg_color_frame, text=self.lang.get_text('background_color'))
+        bg_color_label.pack(anchor=tk.W, pady=(10, 0))
+        bg_color_button = ttk.Button(
+            bg_color_frame, 
+            text="Color: " + (self.settings.get('background_color') or '#ffffff'),
+            width=15,
+            command=lambda: self.choose_color('background_color', bg_color_button)
+        )
+        bg_color_button.pack(anchor=tk.W, pady=(5, 0))
+        
+        self.dynamic_widgets['ppt_bg_color'] = {
+            'frame': bg_color_frame,
+            'widgets': [bg_color_label, bg_color_button],
+            'color_button': bg_color_button
+        }
+        
+        # Accent color
+        accent_color_frame = ttk.Frame(parent_frame)
+        accent_color_label = ttk.Label(accent_color_frame, text=self.lang.get_text('accent_color'))
+        accent_color_label.pack(anchor=tk.W, pady=(10, 0))
+        accent_color_button = ttk.Button(
+            accent_color_frame, 
+            text="Color: " + (self.settings.get('accent_color') or '#1f497d'),
+            width=15,
+            command=lambda: self.choose_color('accent_color', accent_color_button)
+        )
+        accent_color_button.pack(anchor=tk.W, pady=(5, 0))
+        
+        self.dynamic_widgets['ppt_accent_color'] = {
+            'frame': accent_color_frame,
+            'widgets': [accent_color_label, accent_color_button],
+            'color_button': accent_color_button
+        }
+    
+    def hex_to_rgb(self, hex_color):
+        """Convert hex color to RGB tuple"""
+        try:
+            # Remove # if present
+            hex_color = hex_color.lstrip('#')
+            # Convert to RGB
+            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        except:
+            # Return black as fallback
+            return (0, 0, 0)
+    
+    def get_color_setting(self, setting_key, default_hex='#000000'):
+        """Get color setting and return as RGB tuple"""
+        hex_color = self.settings.get(setting_key, default_hex)
+        return self.hex_to_rgb(hex_color)
+    
+    def choose_color(self, setting_key, button):
+        """Open color chooser dialog and update the setting"""
+        current_color = self.settings.get(setting_key, '#000000')
+        color = colorchooser.askcolor(
+            color=current_color,
+            title=self.lang.get_text('choose_color')        )
+        
+        if color[1]:  # If a color was selected (not cancelled)
+            # Update the setting
+            self.settings.set(setting_key, color[1])
+            # Update the button display with color preview
+            self.update_color_button_display(button, color[1])
+    def update_color_button_display(self, button, hex_color):
+        """Update color button display with color preview"""
+        # Show color code and visual indicator
+        button.configure(text=f"Color: {hex_color}")
+        
+    def initialize_color_buttons(self):
+        """Initialize color button displays with current settings"""
+        if 'ppt_title_color' in self.dynamic_widgets:
+            button = self.dynamic_widgets['ppt_title_color']['color_button']
+            color = self.settings.get('title_text_color', '#000000')
+            self.update_color_button_display(button, color)
+            
+        if 'ppt_bg_color' in self.dynamic_widgets:
+            button = self.dynamic_widgets['ppt_bg_color']['color_button']
+            color = self.settings.get('background_color', '#ffffff')
+            self.update_color_button_display(button, color)
+            
+        if 'ppt_accent_color' in self.dynamic_widgets:
+            button = self.dynamic_widgets['ppt_accent_color']['color_button']
+            color = self.settings.get('accent_color', '#1f497d')
+            self.update_color_button_display(button, color)
     
     def create_splitter_fields(self, parent_frame):
         """Create fields specific to image splitting"""
@@ -2200,6 +2489,10 @@ class ImageCropperApp:
             # Show PowerPoint conversion fields
             self.dynamic_widgets['ppt_lines']['frame'].pack(fill=tk.X, pady=5)
             self.dynamic_widgets['ppt_spacing']['frame'].pack(fill=tk.X, pady=5)
+            # Show color selection fields
+            self.dynamic_widgets['ppt_title_color']['frame'].pack(fill=tk.X, pady=5)
+            self.dynamic_widgets['ppt_bg_color']['frame'].pack(fill=tk.X, pady=5)
+            self.dynamic_widgets['ppt_accent_color']['frame'].pack(fill=tk.X, pady=5)
             
         elif operation == "splitter":
             # Show splitter fields
@@ -2233,12 +2526,27 @@ class ImageCropperApp:
                 widgets = self.dynamic_widgets['splitter_rows']['widgets']
                 if len(widgets) >= 1:
                     widgets[0].config(text=self.lang.get_text('rows_per_page'))
-            
             if 'splitter_questions' in self.dynamic_widgets:
                 widgets = self.dynamic_widgets['splitter_questions']['widgets']
                 if len(widgets) >= 1:
                     widgets[0].config(text=self.lang.get_text('detect_questions'))
-                    
+            
+            # Update color field labels
+            if 'ppt_title_color' in self.dynamic_widgets:
+                widgets = self.dynamic_widgets['ppt_title_color']['widgets']
+                if len(widgets) >= 1:
+                    widgets[0].config(text=self.lang.get_text('title_text_color'))
+            
+            if 'ppt_bg_color' in self.dynamic_widgets:
+                widgets = self.dynamic_widgets['ppt_bg_color']['widgets']
+                if len(widgets) >= 1:
+                    widgets[0].config(text=self.lang.get_text('background_color'))
+            
+            if 'ppt_accent_color' in self.dynamic_widgets:
+                widgets = self.dynamic_widgets['ppt_accent_color']['widgets']
+                if len(widgets) >= 1:
+                    widgets[0].config(text=self.lang.get_text('accent_color'))
+            
         except Exception as e:
             print(f"Error updating dynamic field text: {e}")
     
