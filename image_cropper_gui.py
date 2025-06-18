@@ -1938,15 +1938,15 @@ class ImageCropperApp:
             
         except Exception as e:
             print(f"⚠️  Could not add icon: {e}")
-    
     def is_better_title(self, line, line_index=0, context_lines=None):
         """
-        Improved title detection logic with stricter criteria:
+        Enhanced title detection logic with very strict criteria:
         1. Must be short (< 80 chars)
         2. Should be uppercase OR contain title keywords OR have strong title structure
-        3. Should NOT end with punctuation that suggests continuation
+        3. Should NOT end with punctuation that suggests continuation or completion
         4. Should NOT be obviously a question in the middle of content
         5. Should NOT contain common non-title patterns (verb endings, articles, etc.)
+        6. Should NOT look like sentence endings or fragments
         """
         if not line or len(line.strip()) == 0:
             return False
@@ -1956,9 +1956,9 @@ class ImageCropperApp:
         # Too long to be a title
         if len(line) > 80:
             return False
-            
-        # If it ends with continuation punctuation, probably not a title
-        if line.endswith(('...', ':', ';', ',', '-')):
+        
+        # Enhanced punctuation checks - sentence endings are NOT titles
+        if line.endswith(('...', ':', ';', ',', '-', '.', '!', '?')):
             return False
             
         # If it's a question in the middle of content, probably not a title
@@ -1968,61 +1968,73 @@ class ImageCropperApp:
                              'where', 'what', 'how', 'why', 'when', 'who', 'which']
             if any(word in line.lower() for word in question_words):
                 return False  # Content question, not title
-                  # Negative indicators - patterns that suggest this is NOT a title
+        
+        # Negative indicators - patterns that suggest this is NOT a title
         line_lower = line.lower()
         line_words = line_lower.split()
         
-        # Common Turkish verb endings and patterns that indicate regular content
-        # Check for whole words and specific endings
-        non_title_words = ['bir', 'bu', 'şu', 'o', 'ile', 'için', 'gibi', 
-                          'the', 'a', 'an', 'is', 'are', 'was', 'were']
-        non_title_endings = ['dir', 'dır', 'dur', 'dür', 'ler', 'lar', 
+        # Enhanced negative patterns - more comprehensive detection
+        non_title_words = ['bir', 'bu', 'şu', 'o', 'ile', 'için', 'gibi', 'her', 'tüm', 'bütün',
+                          'the', 'a', 'an', 'is', 'are', 'was', 'were', 'this', 'that', 'these', 'those',
+                          'and', 'or', 'but', 'so', 'because', 'if', 'when', 'while', 'since']
+        
+        # More comprehensive Turkish verb endings and grammatical patterns
+        non_title_endings = ['dir', 'dır', 'dur', 'dür', 'ler', 'lar', 'ık', 'ık', 'uk', 'ük',
                             'den', 'dan', 'ten', 'tan', 'nın', 'nin', 'nun', 'nün',
-                            'da', 'de', 'ta', 'te']
-        specific_verbs = ['yetkilidir', 'edilir', 'yapılır', 'olur', 'bulur']
-          # Check for negative patterns
+                            'da', 'de', 'ta', 'te', 'ya', 'ye', 'sa', 'se',
+                            'mış', 'miş', 'muş', 'müş', 'tı', 'ti', 'tu', 'tü']
+        
+        # Common verb forms and sentence endings
+        specific_verbs = ['yetkilidir', 'edilir', 'yapılır', 'olur', 'bulur', 'gelir', 'gider', 
+                         'kalır', 'değildir', 'vardır', 'yoktur', 'bilir', 'söyler']
+        
+        # Sentence ending patterns (Turkish)
+        sentence_endings = ['dir', 'dır', 'dur', 'dür', 'tır', 'tir', 'tur', 'tür',
+                           'bilir', 'gelir', 'gider', 'olur', 'kalır', 'yapar', 'eder']
+        
+        # Check for negative patterns
         has_non_title_pattern = False
         
         # Check whole words first (most definitive)
         if any(word in line_words for word in non_title_words):
             has_non_title_pattern = True
         
-        # Check specific verb forms (but allow title case to override)
+        # Check for sentence ending patterns
+        elif any(line_lower.endswith(ending) for ending in sentence_endings):
+            has_non_title_pattern = True
+            
+        # Check specific verb forms (but allow title case to override ONLY for obvious titles)
         elif any(verb in line_lower for verb in specific_verbs):
-            # Check if it's title case first
-            if len(line_words) <= 3:
-                capitalized_words = [w for w in line.split() if w and w[0].isupper()]
-                if len(capitalized_words) >= len(line.split()) * 0.6:  # 60% capitalized
-                    has_non_title_pattern = False  # Title case overrides verb endings
-                else:
-                    has_non_title_pattern = True
+            # Be much more restrictive - only allow if it's clearly formatted as a title
+            if len(line_words) <= 2 and line.isupper():
+                has_non_title_pattern = False  # Clear title format
             else:
                 has_non_title_pattern = True
                 
         # Check word endings (but be more careful)
         elif any(word.endswith(ending) for word in line_words for ending in non_title_endings):
-            # Additional check: if it's a single word ending with these, it might still be a title
-            # if it's capitalized and not obviously a verb
-            if len(line_words) == 1 and line_words[0][0].isupper():
-                has_non_title_pattern = False  # Single capitalized word might be a title
-            # Also check if it's clearly title case (most words capitalized)
-            elif len(line_words) <= 3:
-                capitalized_words = [w for w in line.split() if w and w[0].isupper()]
-                if len(capitalized_words) >= len(line.split()) * 0.6:  # 60% capitalized
-                    has_non_title_pattern = False  # Title case overrides endings
-                else:
-                    has_non_title_pattern = True
+            # Only allow if it's a single UPPERCASE word or clearly title case
+            if len(line_words) == 1 and line.isupper():
+                has_non_title_pattern = False  # Single uppercase word might be a title
+            elif len(line_words) <= 2 and line.isupper():
+                has_non_title_pattern = False  # Short uppercase phrase
             else:
                 has_non_title_pattern = True
         
-        # Strong title indicators
+        # Additional sentence pattern detection
+        sentence_starters = ['bu', 'şu', 'o', 'her', 'birçok', 'bazı', 'tüm', 'bütün',
+                            'this', 'that', 'these', 'those', 'many', 'some', 'all', 'every']
+        if any(line_lower.startswith(starter + ' ') for starter in sentence_starters):
+            has_non_title_pattern = True
+        
+        # Strong title indicators (must be very clear)
         if line.isupper() and len(line) > 2:
             return True
             
         # Title keywords (case insensitive)
         title_keywords = ['başlık', 'giriş', 'bölüm', 'sonuç', 'özet', 'genel bakış', 
                          'introduction', 'chapter', 'conclusion', 'summary', 'overview',
-                         'madde', 'kısım', 'section', 'part']
+                         'madde', 'kısım', 'section', 'part', 'konu', 'alan', 'durum']
         has_title_keyword = any(keyword in line_lower for keyword in title_keywords)
         
         if has_title_keyword:
@@ -2032,24 +2044,32 @@ class ImageCropperApp:
         if line_lower.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', 
                                  'i.', 'ii.', 'iii.', 'iv.', 'v.', 'a.', 'b.', 'c.')):
             return True
-              # For short text at the beginning, be more restrictive
+        
+        # Much more restrictive criteria for short text at the beginning
         if line_index == 0 and len(line) < 50:
-            # Only consider it a title if it doesn't have non-title patterns
-            # AND has some title-like characteristics
+            # Reject if it has any non-title patterns
             if has_non_title_pattern:
                 return False
-                
-            # Additional title indicators for short text
-            # Check if it looks like a proper noun or title case
+            
+            # Additional title indicators for short text - be much more restrictive
             words = line.split()
-            if len(words) <= 4:  # Short phrases might be titles
-                # Check if most words are capitalized (title case)
+            
+            # Only very clear title cases
+            if len(words) <= 3:
+                # Must be mostly capitalized AND not look like a sentence
                 capitalized_words = [w for w in words if w and w[0].isupper()]
-                if len(capitalized_words) >= len(words) * 0.6:  # At least 60% capitalized
-                    return True
-                    
-            # Very short (< 20 chars), no negative patterns, and meaningful length might be title
-            if len(line) < 20 and not has_non_title_pattern and len(line) > 3:
+                capitalization_ratio = len(capitalized_words) / len(words) if words else 0
+                
+                # Higher threshold and additional checks
+                if capitalization_ratio >= 0.8:  # At least 80% capitalized (raised from 60%)
+                    # Additional check: doesn't contain common sentence connectors
+                    connectors = ['ve', 'ile', 'and', 'or', 'but', 'the']
+                    if not any(conn in line_lower for conn in connectors):
+                        return True
+            
+            # Very short (< 15 chars), no negative patterns, meaningful length, and looks like a proper noun
+            if (len(line) < 15 and not has_non_title_pattern and len(line) > 4 and 
+                line[0].isupper() and not any(line_lower.endswith(end) for end in sentence_endings)):
                 return True
                 
         return False
