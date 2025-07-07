@@ -622,7 +622,35 @@ class ImageCropperApp:
         
         # Create all possible dynamic fields
         self.create_dynamic_fields(param_frame)
-        
+
+        # Add margin controls for image splitting (inches)
+        self.margin_left_var = tk.DoubleVar(value=0.1)
+        self.margin_right_var = tk.DoubleVar(value=0.1)
+        self.margin_top_var = tk.DoubleVar(value=0.0)
+        self.margin_bottom_var = tk.DoubleVar(value=0.0)
+
+        margin_frame = ttk.LabelFrame(param_frame, text="Image Split Padding (inches)", padding="5")
+        margin_frame.pack(fill=tk.X, pady=2)
+        self.widgets['margin_frame'] = margin_frame
+
+        ttk.Label(margin_frame, text="Left:").pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(margin_frame, from_=0, to=2, increment=0.05, textvariable=self.margin_left_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(margin_frame, text="Right:").pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(margin_frame, from_=0, to=2, increment=0.05, textvariable=self.margin_right_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(margin_frame, text="Top:").pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(margin_frame, from_=0, to=2, increment=0.05, textvariable=self.margin_top_var, width=5).pack(side=tk.LEFT)
+        ttk.Label(margin_frame, text="Bottom:").pack(side=tk.LEFT, padx=2)
+        ttk.Spinbox(margin_frame, from_=0, to=2, increment=0.05, textvariable=self.margin_bottom_var, width=5).pack(side=tk.LEFT)
+
+        # Only show margin controls for splitter operation
+        def update_margin_visibility(*args):
+            if self.operation_var.get() == 'splitter':
+                margin_frame.pack(fill=tk.X, pady=2)
+            else:
+                margin_frame.pack_forget()
+        self.operation_var.trace_add('write', lambda *args: update_margin_visibility())
+        update_margin_visibility()
+
         # Initialize field visibility based on default operation
         self.on_operation_change()
         
@@ -1139,7 +1167,20 @@ class ImageCropperApp:
                 # Simple image splitting
                 rows_per_page = params.get('rows_per_page', 10)
                 detect_questions = params.get('detect_questions', True)
-                
+
+                # Get user-defined margins (inches, convert to pixels for 1920x1080)
+                left_in = self.margin_left_var.get()
+                right_in = self.margin_right_var.get()
+                top_in = self.margin_top_var.get()
+                bottom_in = self.margin_bottom_var.get()
+                # 1920px width = 16in, 1080px height = 9in
+                px_per_in_w = 1920 / 16.0
+                px_per_in_h = 1080 / 9.0
+                left_px = int(left_in * px_per_in_w)
+                right_px = int(right_in * px_per_in_w)
+                top_px = int(top_in * px_per_in_h)
+                bottom_px = int(bottom_in * px_per_in_h)
+
                 if detect_questions:
                     custom_config = r'-l tur --oem 3 --psm 6'
                     ocr_text = pytesseract.image_to_string(img, config=custom_config)
@@ -1149,30 +1190,29 @@ class ImageCropperApp:
                 if has_questions:
                     # Don't split images with questions
                     cleaned_img = remove_empty_rows_and_columns(img)
-                    cleaned_img = add_outer_border(cleaned_img, top_border=50, bottom_border=50)
+                    cleaned_img = add_outer_border(cleaned_img, top_border=top_px, bottom_border=bottom_px, left_border=left_px, right_border=right_px)
                     cleaned_img = cv2.resize(cleaned_img, (1920, 1080))
                     output_path = os.path.join(self.output_dir, image_name)
                     cv2.imwrite(output_path, cleaned_img)
                 else:
                     # Intelligent split that avoids cutting through text
                     max_splits = params.get('max_splits', 2)  # Default to 2 parts, but configurable
-                    
+
                     if max_splits > 2:
                         # Use advanced multi-split analysis for complex images
                         split_points = self.find_multiple_split_points(img, max_splits)
                     else:
                         # Use simple 2-way split with text analysis
                         split_points = self.find_optimal_split_points(img)
-                    
+
                     print(f"🎯 Applying {len(split_points)} intelligent splits")
-                    
+
                     for i, (start_y, end_y) in enumerate(split_points):
                         crop_img = img[start_y:end_y, :]
-                        
+
                         crop_img = remove_empty_rows_and_columns(crop_img)
-                        crop_img = add_outer_border(crop_img, top_border=100, bottom_border=100, left_border=40, right_border=40)
+                        crop_img = add_outer_border(crop_img, top_border=top_px, bottom_border=bottom_px, left_border=left_px, right_border=right_px)
                         if not is_image_blank(crop_img):
-                            crop_img = add_outer_border(crop_img, top_border=50, bottom_border=50)
                             crop_img = cv2.resize(crop_img, (1920, 1080))
                             output_path = os.path.join(self.output_dir, f"{image_name}_{i}.png")
                             cv2.imwrite(output_path, crop_img)

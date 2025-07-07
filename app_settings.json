@@ -1,23 +1,23 @@
 {
   "language": "en",
-  "output_directory": "E:/bab/done",
-  "last_input_directory": "D:/baba/werw",
+  "output_directory": "D:/baba/New folder",
+  "last_input_directory": "D:/baba/24",
   "lines_per_slide": "4",
-  "rows_per_page": "6",
+  "rows_per_page": "2",
   "detect_questions": false,
   "selected_operation": "splitter",
   "line_spacing": "1.2",
-  "window_geometry": "800x900",
+  "window_geometry": "800x1018",
   "window_position": "+155+189",
   "recent_files": [],
   "recent_folders": [
-    "D:/baba/werw",
-    "D:/baba/iş kazası- 194 s- 151 s-031123 (1)",
-    "D:/baba/wer"
+    "D:/baba/24",
+    "D:/baba/46.2-Calisma-Hayatinda-Etik",
+    "D:/baba/New folder (6)"
   ],
   "title_text_color": "#000000",
   "background_color": "#ffffff",
   "accent_color": "#1f497d",
-  "last_saved": 1750195144.6902149,
+  "last_saved": 1751713425.2824714,
   "operation": "splitter"
 }
