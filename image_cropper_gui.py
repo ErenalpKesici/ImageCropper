@@ -87,7 +87,9 @@ class SettingsManager:
             'last_input_directory': os.getcwd(),
             'lines_per_slide': 7,
             'rows_per_page': 10,
-            'detect_questions': True,            'selected_operation': 'splitter',
+            'max_splits': 2,
+            'detect_questions': True,
+            'selected_operation': 'splitter',
             'line_spacing': 1.5,
             'window_geometry': '800x900',
             'window_position': None,
@@ -96,7 +98,12 @@ class SettingsManager:
             # PowerPoint color settings (hex format)
             'title_text_color': '#000000',
             'background_color': '#ffffff', 
-            'accent_color': '#1f497d'
+            'accent_color': '#1f497d',
+            # Image split margin settings (inches)
+            'margin_left': 0.1,
+            'margin_right': 0.1,
+            'margin_top': 0.0,
+            'margin_bottom': 0.0
         }
         self.settings = self.default_settings.copy()
         self.load_settings()
@@ -593,7 +600,7 @@ class ImageCropperApp:
         operation_frame.pack(fill=tk.X, pady=5)
         self.widgets['operation_frame'] = operation_frame
         
-        self.operation_var = tk.StringVar(value="splitter")
+        self.operation_var = tk.StringVar(value=self.settings.get('selected_operation', 'splitter'))
         # Add trace to handle operation changes
         self.operation_var.trace('w', self.on_operation_change)
         
@@ -624,10 +631,16 @@ class ImageCropperApp:
         self.create_dynamic_fields(param_frame)
 
         # Add margin controls for image splitting (inches)
-        self.margin_left_var = tk.DoubleVar(value=0.1)
-        self.margin_right_var = tk.DoubleVar(value=0.1)
-        self.margin_top_var = tk.DoubleVar(value=0.0)
-        self.margin_bottom_var = tk.DoubleVar(value=0.0)
+        self.margin_left_var = tk.DoubleVar(value=self.settings.get('margin_left', 0.1))
+        self.margin_right_var = tk.DoubleVar(value=self.settings.get('margin_right', 0.1))
+        self.margin_top_var = tk.DoubleVar(value=self.settings.get('margin_top', 0.0))
+        self.margin_bottom_var = tk.DoubleVar(value=self.settings.get('margin_bottom', 0.0))
+
+        # Add traces to auto-save margin settings
+        self.margin_left_var.trace('w', lambda *args: self.settings.set('margin_left', self.margin_left_var.get()))
+        self.margin_right_var.trace('w', lambda *args: self.settings.set('margin_right', self.margin_right_var.get()))
+        self.margin_top_var.trace('w', lambda *args: self.settings.set('margin_top', self.margin_top_var.get()))
+        self.margin_bottom_var.trace('w', lambda *args: self.settings.set('margin_bottom', self.margin_bottom_var.get()))
 
         margin_frame = ttk.LabelFrame(param_frame, text="Image Split Padding (inches)", padding="5")
         margin_frame.pack(fill=tk.X, pady=2)
@@ -2151,7 +2164,8 @@ class ImageCropperApp:
             if os.path.exists("app_settings.json"):
                 with open("app_settings.json", "r", encoding="utf-8") as f:
                     settings = json.load(f)
-                      # Restore UI state
+                    
+                    # Restore UI state
                     if hasattr(self, 'operation_var') and 'operation' in settings:
                         self.operation_var.set(settings['operation'])
                     
@@ -2164,8 +2178,24 @@ class ImageCropperApp:
                     if hasattr(self, 'rows_per_page_var') and 'rows_per_page' in settings:
                         self.rows_per_page_var.set(settings['rows_per_page'])
                     
+                    if hasattr(self, 'max_splits_var') and 'max_splits' in settings:
+                        self.max_splits_var.set(settings['max_splits'])
+                    
                     if hasattr(self, 'detect_questions_var') and 'detect_questions' in settings:
                         self.detect_questions_var.set(settings['detect_questions'])
+                    
+                    # Restore margin settings
+                    if hasattr(self, 'margin_left_var') and 'margin_left' in settings:
+                        self.margin_left_var.set(settings['margin_left'])
+                    
+                    if hasattr(self, 'margin_right_var') and 'margin_right' in settings:
+                        self.margin_right_var.set(settings['margin_right'])
+                    
+                    if hasattr(self, 'margin_top_var') and 'margin_top' in settings:
+                        self.margin_top_var.set(settings['margin_top'])
+                    
+                    if hasattr(self, 'margin_bottom_var') and 'margin_bottom' in settings:
+                        self.margin_bottom_var.set(settings['margin_bottom'])
                     
                     # Restore output directory
                     if 'output_directory' in settings:
@@ -2173,27 +2203,60 @@ class ImageCropperApp:
                         if hasattr(self, 'output_dir_label'):
                             self.output_dir_label.config(text=self.output_dir)
                     
+                    # Restore window geometry and position
+                    if hasattr(self, 'root'):
+                        if 'window_geometry' in settings:
+                            try:
+                                self.root.geometry(settings['window_geometry'])
+                            except:
+                                pass  # Ignore if geometry is invalid
+                        
+                        if 'window_position' in settings and settings['window_position']:
+                            try:
+                                geometry = self.root.geometry()
+                                size_part = geometry.split('+')[0]  # Get just WIDTHxHEIGHT part
+                                new_geometry = size_part + settings['window_position']
+                                self.root.geometry(new_geometry)
+                            except:
+                                pass  # Ignore if position is invalid
+                    
         except Exception as e:
             print(f"Could not load saved values: {e}")
     
     def save_current_values(self):
         """Save current configuration values including UI state"""
         try:
-            settings = {
+            # Get current settings dictionary
+            current_settings = dict(self.settings.settings)
+            
+            # Update with current UI state values
+            current_settings.update({
                 "last_saved": time.time(),
                 # UI state values
                 "language": self.lang.get_current_language(),
-                "operation": self.operation_var.get() if hasattr(self, 'operation_var') else "splitter",                "lines_per_slide": self.lines_per_slide_var.get() if hasattr(self, 'lines_per_slide_var') else "7",
+                "operation": self.operation_var.get() if hasattr(self, 'operation_var') else "splitter",
+                "lines_per_slide": self.lines_per_slide_var.get() if hasattr(self, 'lines_per_slide_var') else "7",
                 "line_spacing": self.line_spacing_var.get() if hasattr(self, 'line_spacing_var') else "1.5",
                 "rows_per_page": self.rows_per_page_var.get() if hasattr(self, 'rows_per_page_var') else "10",
+                "max_splits": self.max_splits_var.get() if hasattr(self, 'max_splits_var') else "2",
                 "detect_questions": self.detect_questions_var.get() if hasattr(self, 'detect_questions_var') else True,
+                # Margin settings (inches)
+                "margin_left": self.margin_left_var.get() if hasattr(self, 'margin_left_var') else 0.1,
+                "margin_right": self.margin_right_var.get() if hasattr(self, 'margin_right_var') else 0.1,
+                "margin_top": self.margin_top_var.get() if hasattr(self, 'margin_top_var') else 0.0,
+                "margin_bottom": self.margin_bottom_var.get() if hasattr(self, 'margin_bottom_var') else 0.0,
                 # Output directory
-                "output_directory": self.output_dir if hasattr(self, 'output_dir') else os.path.join(os.getcwd(), "cropped"),                # Window settings
+                "output_directory": self.output_dir if hasattr(self, 'output_dir') else os.path.join(os.getcwd(), "cropped"),
+                # Window settings
                 "window_geometry": f"{self.root.winfo_width()}x{self.root.winfo_height()}" if hasattr(self, 'root') else "800x900",
                 "window_position": f"+{self.root.winfo_x()}+{self.root.winfo_y()}" if hasattr(self, 'root') and self.root.winfo_x() >= 0 and self.root.winfo_y() >= 0 else None
-            }
+            })
+            
+            # Update the main settings object
+            self.settings.settings.update(current_settings)
+            
             with open("app_settings.json", "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2, ensure_ascii=False)
+                json.dump(current_settings, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"Could not save values: {e}")
     
@@ -2379,7 +2442,8 @@ class ImageCropperApp:
         lines_label = ttk.Label(lines_frame, text=self.lang.get_text('lines_per_slide'))
         lines_label.pack(anchor=tk.W)
         
-        self.lines_per_slide_var = tk.StringVar(value="7")
+        self.lines_per_slide_var = tk.StringVar(value=str(self.settings.get('lines_per_slide', 7)))
+        self.lines_per_slide_var.trace('w', lambda *args: self.settings.set('lines_per_slide', self.lines_per_slide_var.get()))
         lines_entry = ttk.Entry(lines_frame, textvariable=self.lines_per_slide_var, width=10)
         lines_entry.pack(anchor=tk.W, pady=5)
         
@@ -2396,7 +2460,8 @@ class ImageCropperApp:
         spacing_label = ttk.Label(spacing_frame, text=self.lang.get_text('line_spacing'))
         spacing_label.pack(anchor=tk.W, pady=(10, 0))
         
-        self.line_spacing_var = tk.StringVar(value="1.5")
+        self.line_spacing_var = tk.StringVar(value=str(self.settings.get('line_spacing', 1.5)))
+        self.line_spacing_var.trace('w', lambda *args: self.settings.set('line_spacing', self.line_spacing_var.get()))
         spacing_entry = ttk.Entry(spacing_frame, textvariable=self.line_spacing_var, width=10)
         spacing_entry.pack(anchor=tk.W, pady=5)
         
@@ -2524,7 +2589,8 @@ class ImageCropperApp:
         rows_label = ttk.Label(rows_frame, text=self.lang.get_text('rows_per_page'))
         rows_label.pack(anchor=tk.W, pady=(10, 0))
         
-        self.rows_per_page_var = tk.StringVar(value="10")
+        self.rows_per_page_var = tk.StringVar(value=str(self.settings.get('rows_per_page', 10)))
+        self.rows_per_page_var.trace('w', lambda *args: self.settings.set('rows_per_page', self.rows_per_page_var.get()))
         rows_entry = ttk.Entry(rows_frame, textvariable=self.rows_per_page_var, width=10)
         rows_entry.pack(anchor=tk.W, pady=5)
         
@@ -2538,7 +2604,8 @@ class ImageCropperApp:
         splits_label = ttk.Label(splits_frame, text=self.lang.get_text('max_splits'))
         splits_label.pack(anchor=tk.W, pady=(10, 0))
         
-        self.max_splits_var = tk.StringVar(value="2")
+        self.max_splits_var = tk.StringVar(value=str(self.settings.get('max_splits', 2)))
+        self.max_splits_var.trace('w', lambda *args: self.settings.set('max_splits', self.max_splits_var.get()))
         splits_entry = ttk.Entry(splits_frame, textvariable=self.max_splits_var, width=10)
         splits_entry.pack(anchor=tk.W, pady=5)
         
@@ -2553,7 +2620,8 @@ class ImageCropperApp:
         
         # Question detection
         question_frame = ttk.Frame(parent_frame)
-        self.detect_questions_var = tk.BooleanVar(value=True)
+        self.detect_questions_var = tk.BooleanVar(value=self.settings.get('detect_questions', True))
+        self.detect_questions_var.trace('w', lambda *args: self.settings.set('detect_questions', self.detect_questions_var.get()))
         question_checkbox = ttk.Checkbutton(
             question_frame, 
             text=self.lang.get_text('detect_questions'),
@@ -2574,6 +2642,9 @@ class ImageCropperApp:
     def on_operation_change(self, *args):
         """Handle operation selection changes to show/hide relevant fields"""
         operation = self.operation_var.get()
+        
+        # Save the operation setting
+        self.settings.set('selected_operation', operation)
         
         # Hide all dynamic fields first
         for widget_group in self.dynamic_widgets.values():
@@ -2805,7 +2876,8 @@ class ImageCropperApp:
             
         except Exception as e:
             print(f"⚠️ Error in multiple split analysis: {e}")
-            # Fallback to simple split
+            # Fallback to simple split - get image dimensions first
+            img_height, width = img.shape[:2]
             mid_height = img_height // 2
             return [(0, mid_height), (mid_height, img_height)]
     
